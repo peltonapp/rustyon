@@ -1,0 +1,29 @@
+// Game configuration, as found in many Rust projects.
+#![enable(implicit_some)]
+
+GameConfig( // the root
+    window_size: (800, 600),
+    window_title: "Rusty Game",
+    fullscreen: false,
+
+    mouse_sensitivity: 1.4,
+    key_bindings: {
+        "up": Up, /* move up */
+        // down key
+        "down": Down,
+        "left": Left,
+        "right": Right,
+    },
+    difficulty_options: (start_difficulty: Easy, adaptive: false),
+    spawn: Some((
+        x: 0x10,
+        y: 1_000,
+    )),
+    sprites: [r#"raw "quoted""#, b"bytes", 'c'],
+    empty: [],
+    empty_with_comment: [
+        // nothing here yet
+    ],
+    // trailing comment in struct
+)
+// after the value
