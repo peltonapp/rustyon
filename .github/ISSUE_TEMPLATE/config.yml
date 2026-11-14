@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Arne K. (TRC-Loop)
+# SPDX-License-Identifier: BSD-3-Clause
+
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/peltonapp/rustyon-go/wiki
+    about: Guides, type mapping, enums and the formatter rules.
+  - name: Report a security vulnerability
+    url: https://github.com/peltonapp/rustyon-go/security/advisories/new
+    about: Please report security problems privately.

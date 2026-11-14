@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Arne K. (TRC-Loop)
+# SPDX-License-Identifier: BSD-3-Clause
+
+name: Feature request
+description: Suggest an improvement or a new feature
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How could rustyon solve it? API sketches are welcome.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Workarounds you tried, or how ron-rs handles this.

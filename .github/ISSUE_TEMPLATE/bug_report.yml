@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Arne K. (TRC-Loop)
+# SPDX-License-Identifier: BSD-3-Clause
+
+name: Bug report
+description: Something does not parse, encode, decode or format correctly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting! Security problems go through private reporting instead, see SECURITY.md.
+  - type: textarea
+    id: input
+    attributes:
+      label: RON input or Go code
+      description: The smallest document or program that shows the problem.
+      render: rust
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: If ron-rs behaves differently, please mention the ron-rs version.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Output or error message.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: rustyon version
+      placeholder: v0.1.0 or commit hash
+    validations:
+      required: true
+  - type: input
+    id: go
+    attributes:
+      label: Go version and OS
+      placeholder: go1.27.1 darwin/arm64
