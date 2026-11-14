@@ -1,17 +1,49 @@
 # SPDX-FileCopyrightText: 2026 Arne K. (TRC-Loop)
 # SPDX-License-Identifier: BSD-3-Clause
 
+# Two tag schemes share this repository:
+#
+#   vX.Y.Z               the library (module github.com/peltonapp/rustyon-go);
+#                        creates a GitHub release without binaries
+#   cmd/rustyon/vX.Y.Z   the CLI (module .../cmd/rustyon); builds binaries
+#                        with GoReleaser and creates a GitHub release
+#
+# GoReleaser OSS cannot read a monorepo tag prefix, so the CLI job hands it
+# the plain version through GORELEASER_CURRENT_TAG, skips its own publishing
+# and uploads dist/ with the gh CLI under the real tag.
+
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
+      - "cmd/rustyon/v*"
 
 permissions:
   contents: write
 
 jobs:
-  goreleaser:
+  library:
+    name: Library release
+    if: ${{ !startsWith(github.ref_name, 'cmd/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Test
+        run: go test -race ./...
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes --latest
+
+  cli:
+    name: CLI release
+    if: ${{ startsWith(github.ref_name, 'cmd/rustyon/v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -20,12 +52,29 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
-      - name: Test
+      - name: Test against the local library
         run: go test -race ./...
+        working-directory: cmd/rustyon
+      - name: Test against the required library version
+        run: go test ./...
+        working-directory: cmd/rustyon
+        env:
+          GOWORK: "off"
+      - name: Resolve version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: echo "VERSION=${TAG#cmd/rustyon/}" >> "$GITHUB_ENV"
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: release --clean --skip=publish,validate
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ env.VERSION }}
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/rustyon_*.tar.gz dist/rustyon_*.zip dist/checksums.txt \
+            --verify-tag --title "rustyon CLI ${VERSION}" --generate-notes --latest=false

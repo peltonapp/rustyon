@@ -14,3 +14,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # The CLI is a separate module with its own dependencies.
+  - package-ecosystem: gomod
+    directory: /cmd/rustyon
+    schedule:
+      interval: weekly

@@ -36,6 +36,9 @@ jobs:
           go-version: ${{ matrix.go }}
       - name: Test
         run: go test -race -count=1 ./...
+      - name: Test CLI module
+        run: go test -race -count=1 ./...
+        working-directory: cmd/rustyon
 
   coverage:
     name: Coverage
@@ -47,6 +50,15 @@ jobs:
           go-version: stable
       - name: Test with coverage
         run: go test -coverprofile=coverage.txt -covermode=atomic ./...
+      - name: Test CLI module with coverage
+        run: go test -coverprofile=coverage.txt -covermode=atomic ./...
+        working-directory: cmd/rustyon
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          files: coverage.txt,cmd/rustyon/coverage.txt
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
       - name: Summary
         run: |
           total=$(go tool cover -func=coverage.txt | tail -1 | awk '{print $3}')
@@ -69,11 +81,19 @@ jobs:
           fi
       - name: go vet
         run: go vet ./...
+      - name: go vet (CLI module)
+        run: go vet ./...
+        working-directory: cmd/rustyon
       - name: SPDX headers
         run: make license
       - uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+      - name: golangci-lint (CLI module)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          working-directory: cmd/rustyon
 
   fuzz:
     name: Fuzz
