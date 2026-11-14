@@ -6,6 +6,7 @@
 package syntax
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -260,7 +261,8 @@ func (l *Lexer) Next() (Token, error) {
 	start := l.Pos()
 	tok, err := l.scan(start)
 	if err != nil {
-		if e, ok := err.(*Error); ok {
+		var e *Error
+		if errors.As(err, &e) {
 			e.Pos = l.Resolve(e.Pos)
 		}
 		return Token{}, err
