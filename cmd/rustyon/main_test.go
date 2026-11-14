@@ -88,7 +88,7 @@ func TestValidate(t *testing.T) {
 		t.Errorf("quiet: code %d, out %q", code, out)
 	}
 	code, _, errOut := runCLI(t, "(a: ", "validate")
-	if code != 1 || !strings.Contains(errOut, "syntax error") {
+	if code != 1 || !strings.HasPrefix(errOut, "<stdin>:1:5: ") {
 		t.Errorf("invalid: code %d, stderr %q", code, errOut)
 	}
 }
