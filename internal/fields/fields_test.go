@@ -42,7 +42,7 @@ type outer struct {
 	Inner
 	conflict1
 	conflict2
-	*hidden // pointer to an unexported struct cannot be allocated, so it is skipped
+	*hidden        // pointer to an unexported struct cannot be allocated, so it is skipped
 	A       string // shadows Inner.A
 	Skip    int    `ron:"-"`
 	private int
