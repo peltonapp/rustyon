@@ -3,8 +3,6 @@
 
 package rustyon
 
-import "github.com/peltonapp/rustyon-go/internal/syntax"
-
 // Format reformats a RON document in a canonical style while preserving
 // comments, literal spellings (number bases, raw strings, escapes) and the
 // author's choice between single line and multi line collections:
@@ -19,19 +17,18 @@ import "github.com/peltonapp/rustyon-go/internal/syntax"
 //   - Single blank lines between elements are kept; longer runs are
 //     collapsed.
 //
-// Format is idempotent. It returns a [*SyntaxError] if src is not valid RON.
+// Format accepts exactly the documents [Parse] accepts, and the result has
+// the same value as the input. Format is idempotent. It returns a
+// [*SyntaxError] if src is not valid RON.
 func Format(src []byte) ([]byte, error) {
 	return FormatIndent(src, "    ")
 }
 
 // FormatIndent is like [Format] but uses indent for each nesting level.
 func FormatIndent(src []byte, indent string) ([]byte, error) {
-	if _, err := ParseDocument(src); err != nil {
+	d, _, err := buildTree(src)
+	if err != nil {
 		return nil, err
 	}
-	out, err := syntax.Format(src, indent)
-	if err != nil {
-		return nil, syntaxError(err)
-	}
-	return out, nil
+	return formatTree(d, len(src), indent), nil
 }

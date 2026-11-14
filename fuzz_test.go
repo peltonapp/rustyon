@@ -21,6 +21,16 @@ var fuzzSeeds = []string{
 	"(r#type: r#true)",
 	"[[[[[]]]]]",
 	"'\\u{1F600}'",
+	"[1..5, ..=3, 2.., .., 1.5..2.5, inf..NaN]",
+	"#![enable(implicit_some)]\n[Some 1, Some(2), Some /* c */ 3, None]",
+	"#![enable(unwrap_variant_newtypes)]\n[Some(x: 1, y: 2), Some(1, 2), Some(), Some((1, 2))]",
+	"#![type = \"my::Type\"]\n#![schema = r#\"s.ron\"#]\n// c\n( )",
+	"#![enable(implicit_some, /* c */ unwrap_newtypes)] Foo( /* a */ 1 )",
+	"Name /* c */ (a /* k */ : /* v */ 1,)",
+	"{ (1, 2): [1], Key: r#raw.id-1, 3: b'a', \"s\": b\"x\" }",
+	"(a: 0b10_1u8, b: -0o7, c: 1e-3f32, d: 1_0.5_0, e: +4, f: -NaN)",
+	"( /* only */ )",
+	"Unit",
 }
 
 func addSeeds(f *testing.F) {
@@ -60,17 +70,18 @@ func FuzzParse(f *testing.F) {
 	})
 }
 
-// FuzzFormat checks that Format is idempotent and preserves the value.
+// FuzzFormat checks that Format accepts exactly what Parse accepts, is
+// idempotent and preserves the value.
 func FuzzFormat(f *testing.F) {
 	addSeeds(f)
 	f.Fuzz(func(t *testing.T, data []byte) {
-		out, err := Format(data)
-		if err != nil {
-			return
+		out, ferr := Format(data)
+		v1, perr := Parse(data)
+		if (ferr == nil) != (perr == nil) {
+			t.Fatalf("Format and Parse disagree on %q: format error %v, parse error %v", data, ferr, perr)
 		}
-		v1, err := Parse(data)
-		if err != nil {
-			t.Fatalf("Format accepted input that Parse rejects: %v", err)
+		if ferr != nil {
+			return
 		}
 		v2, err := Parse(out)
 		if err != nil {

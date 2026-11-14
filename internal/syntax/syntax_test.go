@@ -86,19 +86,3 @@ func TestExtensionBit(t *testing.T) {
 		t.Error("unknown extension accepted")
 	}
 }
-
-func TestFormatValidation(t *testing.T) {
-	for _, src := range []string{
-		"Some(1, 2)", "Some(a: 1)", "Some", "true(1)", "None()", "300u8",
-		"#![enable(nope)] 1", "#![disable(implicit_some)] 1", "(a: 1, 2)", "\xff",
-	} {
-		if _, err := Format([]byte(src), "  "); err == nil {
-			t.Errorf("Format(%q): expected error", src)
-		}
-	}
-	for _, src := range []string{"r#Some(1, 2)", "r#true(1)", "Some(1,)", "(a: 1,)"} {
-		if _, err := Format([]byte(src), "  "); err != nil {
-			t.Errorf("Format(%q): %v", src, err)
-		}
-	}
-}
