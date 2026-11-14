@@ -143,6 +143,96 @@ tags:[1,2,3])`)
 	// )
 }
 
+func ExampleParseEditable() {
+	src := []byte(`// server settings
+(
+    host: "localhost", // where to listen
+    port: 8080,
+    users: ["ann", "bob"],
+)`)
+	doc, err := rustyon.ParseEditable(src)
+	if err != nil {
+		log.Fatal(err)
+	}
+	port, _ := doc.Get("port")
+	fmt.Println("port was", port)
+
+	if err := doc.Set("port", rustyon.NewInt(9090)); err != nil {
+		log.Fatal(err)
+	}
+	if err := doc.Append("users", rustyon.String("cy")); err != nil {
+		log.Fatal(err)
+	}
+	if err := doc.Delete("users[0]"); err != nil {
+		log.Fatal(err)
+	}
+	// A missing field is added at the end.
+	if err := doc.Set("debug", rustyon.Bool(true)); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Print(doc)
+	// Output:
+	// port was 8080
+	// // server settings
+	// (
+	//     host: "localhost", // where to listen
+	//     port: 9090,
+	//     users: ["bob", "cy"],
+	//     debug: true,
+	// )
+}
+
+func ExampleEditable_SetRON() {
+	doc, err := rustyon.ParseEditable([]byte(`(range: 1..3, name: "x") // keep me`))
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Literals can be written exactly as they should appear.
+	if err := doc.SetRON("range", "0x10..=0x20"); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(doc)
+	// Output: (range: 0x10..=0x20, name: "x") // keep me
+}
+
+func ExampleEditable_Insert() {
+	doc, err := rustyon.ParseEditable([]byte("[\n    1,\n    // three\n    3,\n]"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := doc.Insert("", 1, rustyon.NewInt(2)); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(doc)
+	// Output:
+	// [
+	//     1,
+	//     2,
+	//     // three
+	//     3,
+	// ]
+}
+
+func ExampleEditable_Delete() {
+	doc, err := rustyon.ParseEditable([]byte("(\n    a: 1,\n    // b is unused\n    b: 2,\n    c: Some((x: 3)),\n)"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	// The comment above b goes with it. Paths look through Some.
+	if err := doc.Delete("b"); err != nil {
+		log.Fatal(err)
+	}
+	if err := doc.Delete("c.x"); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(doc)
+	// Output:
+	// (
+	//     a: 1,
+	//     c: Some(()),
+	// )
+}
+
 func ExampleEncoder() {
 	enc := rustyon.NewEncoder(os.Stdout)
 	enc.SetStructNames(true)

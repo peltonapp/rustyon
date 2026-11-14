@@ -153,11 +153,7 @@ func (e *Editable) set(path, text string) error {
 		}
 		item = formatIdent(l.step.Name) + ": " + text
 	case ckMap:
-		key, err := e.newMapKey(l)
-		if err != nil {
-			return err
-		}
-		item = key + ": " + text
+		item = e.newMapKey(l) + ": " + text
 	default:
 		return fmt.Errorf("%w: %s", ErrPathNotFound, l.step.Text)
 	}
@@ -434,21 +430,21 @@ func kindName(k ckind) string {
 }
 
 // newMapKey returns the source text of the key for a new map entry.
-func (e *Editable) newMapKey(l loc) (string, error) {
+func (e *Editable) newMapKey(l loc) string {
 	if l.step.Kind == rpath.Index {
-		return strconv.Itoa(l.step.Index), nil
+		return strconv.Itoa(l.step.Index)
 	}
 	items := l.parent.c.items
 	if len(items) > 0 {
 		if k, err := e.valueOf(&items[0].key); err == nil {
 			if _, ok := k.(Ident); ok && isPlainIdent(l.step.Name) && !reservedIdents[l.step.Name] {
-				return l.step.Name, nil
+				return l.step.Name
 			}
 		}
 	}
 	var sb bytes.Buffer
 	writeQuoted(&sb, l.step.Name)
-	return sb.String(), nil
+	return sb.String()
 }
 
 // ---------------------------------------------------------------------------

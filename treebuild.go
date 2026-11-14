@@ -511,7 +511,8 @@ func (b *builder) afterValue(n *fcoll, it *fitem) (bool, error) {
 		if err := b.ws(); err != nil {
 			return false, err
 		}
-		trailing = append(before, b.sameLine()...)
+		trailing = append(trailing, before...)
+		trailing = append(trailing, b.sameLine()...)
 	} else {
 		trailing = b.sameLine()
 	}
