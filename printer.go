@@ -115,7 +115,7 @@ func (p *printer) value(v Value) {
 			p.sb.WriteString("( )")
 			return
 		}
-		p.seq('(', ')', len(v.Values),!allScalar(v.Values), func(i int) { p.value(v.Values[i]) })
+		p.seq('(', ')', len(v.Values), !allScalar(v.Values), func(i int) { p.value(v.Values[i]) })
 	case Struct:
 		if v.Name != "" {
 			p.ident(v.Name)
