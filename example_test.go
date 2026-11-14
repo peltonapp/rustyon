@@ -247,3 +247,32 @@ func ExampleEncoder() {
 	}
 	// Output: #![enable(implicit_some)]Window(title:"main",width:640)
 }
+
+func ExampleNamingStrategy() {
+	type Window struct {
+		WindowTitle string
+		MaxFPS      int
+	}
+	out, err := rustyon.MarshalWith(Window{"main", 60}, rustyon.EncodeOptions{FieldNaming: rustyon.CamelCase})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(out))
+
+	// A rename_all option on the struct overrides the default, as in serde.
+	type Fixed struct {
+		_      struct{} `ron:",rename_all=SCREAMING_SNAKE_CASE"`
+		MaxFPS int
+		Tagged int `ron:"keep"`
+	}
+	out, _ = rustyon.MarshalWith(Fixed{MaxFPS: 60, Tagged: 1}, rustyon.EncodeOptions{FieldNaming: rustyon.CamelCase})
+	fmt.Println(string(out))
+
+	var w Window
+	err = rustyon.UnmarshalWith([]byte(`(windowTitle: "x", maxFps: 30)`), &w, rustyon.DecodeOptions{FieldNaming: rustyon.CamelCase})
+	fmt.Println(w, err)
+	// Output:
+	// (windowTitle:"main",maxFps:60)
+	// (MAX_FPS:60,keep:1)
+	// {x 30} <nil>
+}

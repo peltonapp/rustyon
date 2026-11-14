@@ -52,14 +52,26 @@ func (si *Info) LookupIndex(name string) (int, bool) {
 	return idx, ok
 }
 
-var cache sync.Map // reflect.Type to *Info
+// caches holds one Info cache per naming strategy: the field names depend on
+// the strategy, so the strategy is part of the cache key.
+var caches [NumNamings]sync.Map // reflect.Type to *Info
 
-// For returns the cached Info for a struct type.
-func For(t reflect.Type) *Info {
-	if si, ok := cache.Load(t); ok {
+// For returns the cached Info for a struct type, using snake_case as the
+// default field naming.
+func For(t reflect.Type) *Info { return ForNaming(t, Snake) }
+
+// ForNaming returns the cached Info for a struct type, using def as the
+// field naming of fields without an explicit name. A rename_all option on
+// the struct's blank field overrides def for that struct.
+func ForNaming(t reflect.Type, def Naming) *Info {
+	if def >= NumNamings {
+		def = Snake
+	}
+	c := &caches[def]
+	if si, ok := c.Load(t); ok {
 		return si.(*Info)
 	}
-	si, _ := cache.LoadOrStore(t, build(t))
+	si, _ := c.LoadOrStore(t, build(t, def))
 	return si.(*Info)
 }
 
@@ -71,7 +83,25 @@ func parseTag(tag string) (name string, opts []string) {
 	return name, opts
 }
 
-func build(t reflect.Type) *Info {
+// renameAll returns the naming selected by a rename_all option of the
+// struct's blank field. Unknown values are ignored.
+func renameAll(t reflect.Type) (Naming, bool) {
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if f.Name != "_" {
+			continue
+		}
+		_, opts := parseTag(f.Tag.Get("ron"))
+		for _, o := range opts {
+			if v, ok := strings.CutPrefix(o, "rename_all="); ok {
+				return ParseNaming(v)
+			}
+		}
+	}
+	return 0, false
+}
+
+func build(t reflect.Type, def Naming) *Info {
 	si := &Info{Name: t.Name(), byName: map[string]int{}, byFold: map[string]int{}}
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -84,6 +114,9 @@ func build(t reflect.Type) *Info {
 		}
 		si.Tuple = si.Tuple || slices.Contains(opts, "tuple")
 	}
+	if n, ok := renameAll(t); ok {
+		def = n
+	}
 
 	type candidate struct {
 		Field
@@ -91,13 +124,19 @@ func build(t reflect.Type) *Info {
 		tagged bool
 	}
 	var cands []candidate
-	var walk func(t reflect.Type, index []int, depth int, seen map[reflect.Type]bool)
-	walk = func(t reflect.Type, index []int, depth int, seen map[reflect.Type]bool) {
+	var walk func(t reflect.Type, index []int, depth int, seen map[reflect.Type]bool, naming Naming)
+	walk = func(t reflect.Type, index []int, depth int, seen map[reflect.Type]bool, naming Naming) {
 		if seen[t] {
 			return
 		}
 		seen[t] = true
 		defer delete(seen, t)
+		if depth > 0 {
+			// An embedded struct can choose its own naming.
+			if n, ok := renameAll(t); ok {
+				naming = n
+			}
+		}
 		for i := range t.NumField() {
 			f := t.Field(i)
 			if f.Name == "_" {
@@ -118,7 +157,7 @@ func build(t reflect.Type) *Info {
 					if !f.IsExported() && f.Type.Kind() == reflect.Pointer {
 						continue
 					}
-					walk(ft, idx, depth+1, seen)
+					walk(ft, idx, depth+1, seen, naming)
 					continue
 				}
 			}
@@ -127,7 +166,7 @@ func build(t reflect.Type) *Info {
 			}
 			tagged := name != ""
 			if !tagged {
-				name = SnakeCase(f.Name)
+				name = naming.Apply(f.Name)
 			}
 			cands = append(cands, candidate{
 				Field: Field{
@@ -142,7 +181,7 @@ func build(t reflect.Type) *Info {
 			})
 		}
 	}
-	walk(t, nil, 0, map[reflect.Type]bool{})
+	walk(t, nil, 0, map[reflect.Type]bool{}, def)
 
 	// Resolve name conflicts like encoding/json: the shallowest field wins,
 	// a tagged field wins over untagged ones at the same depth, and

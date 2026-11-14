@@ -55,13 +55,7 @@ var (
 // may be partially modified. Each such method is called at most once per
 // value, including when a later part of the input is invalid.
 func Unmarshal(data []byte, v any) error {
-	err := unmarshalStream(data, v, &decodeOptions{})
-	if err == nil {
-		return nil
-	}
-	// The streaming decoder only reports that it failed. Parsing finds
-	// syntax errors and tree decoding into a scratch value finds the rest.
-	return unmarshalFallback(data, v, &decodeOptions{}, err)
+	return unmarshal(data, v, &decodeOptions{})
 }
 
 // FromValue stores a parsed [Value] in the Go value pointed to by target,
@@ -75,6 +69,7 @@ type decodeOptions struct {
 	registry        *Registry
 	exts            Extensions // extensions enabled by the document
 	noHooks         bool       // skip Unmarshaler and TextUnmarshaler calls
+	naming          fields.Naming
 }
 
 func decodeInto(val Value, v any, opts *decodeOptions) error {
@@ -111,6 +106,12 @@ func NewDecoder(r io.Reader) *Decoder {
 // DisallowUnknownFields makes Decode return an [UnknownFieldError] when the
 // input contains a struct field that has no matching Go field.
 func (dec *Decoder) DisallowUnknownFields() { dec.opts.disallowUnknown = true }
+
+// SetFieldNaming sets how Go field names without a tag name map to RON field
+// names. The default is [SnakeCase]. A rename_all option on a struct
+// overrides it for that struct. Names still match case-insensitively when no
+// exact match exists.
+func (dec *Decoder) SetFieldNaming(n NamingStrategy) { dec.opts.naming = fields.Naming(n) }
 
 // SetRegistry sets the enum registry. A nil registry selects
 // [DefaultRegistry].
@@ -529,7 +530,7 @@ func (d *decoder) decodeVariantBody(v Value, name string, rv reflect.Value) erro
 	d.pushVariant(name)
 	defer d.pop()
 	if t.Kind() == reflect.Struct && !hasCustomUnmarshaler(t) {
-		si := fields.For(t)
+		si := fields.ForNaming(t, d.opts.naming)
 		switch v := v.(type) {
 		case Ident, String:
 			return nil // unit variant, all fields zero
@@ -704,7 +705,7 @@ func keyString(k Value) string {
 
 func (d *decoder) decodeStruct(v Value, rv reflect.Value) error {
 	t := rv.Type()
-	si := fields.For(t)
+	si := fields.ForNaming(t, d.opts.naming)
 
 	// unwrap_newtypes: a single field tuple struct written as its inner value.
 	if si.IsNewtype() {

@@ -36,6 +36,7 @@ type encodeOptions struct {
 	structNames    bool
 	implicitSome   bool
 	unwrapNewtypes bool
+	naming         fields.Naming
 	registry       *Registry
 }
 
@@ -60,7 +61,8 @@ func (o *encodeOptions) extensions() Extensions {
 //   - Slices and arrays map to lists [a, b].
 //   - Maps map to {k: v}, with entries sorted by key.
 //   - Structs map to (field: value). Field names default to the snake_case
-//     form of the Go name and can be changed with a `ron:"name"` tag. The
+//     form of the Go name (see [NamingStrategy] for other styles) and can be
+//     changed with a `ron:"name"` tag. The
 //     options omitempty and omitzero skip empty or zero fields, and "-"
 //     skips a field. A blank field of type struct{} named _ with the tag
 //     `ron:"Name,tuple"` sets the struct's RON name and, with the tuple
@@ -152,6 +154,11 @@ func (enc *Encoder) SetImplicitSome(on bool) { enc.opts.implicitSome = on }
 // the output.
 func (enc *Encoder) SetUnwrapNewtypes(on bool) { enc.opts.unwrapNewtypes = on }
 
+// SetFieldNaming sets how Go field names without a tag name become RON field
+// names. The default is [SnakeCase]. A rename_all option on a struct
+// overrides it for that struct.
+func (enc *Encoder) SetFieldNaming(n NamingStrategy) { enc.opts.naming = fields.Naming(n) }
+
 // SetRegistry sets the enum registry. A nil registry selects
 // [DefaultRegistry].
 func (enc *Encoder) SetRegistry(r *Registry) { enc.opts.registry = r }
@@ -209,7 +216,7 @@ func (e *encoder) encodeVariant(rv reflect.Value, name string) (Value, error) {
 		rv = rv.Elem()
 	}
 	if rv.Kind() == reflect.Struct && !hasCustomMarshaler(rv.Type()) {
-		si := fields.For(rv.Type())
+		si := fields.ForNaming(rv.Type(), e.opts.naming)
 		if len(si.Fields) == 0 {
 			return Ident(name), nil
 		}
@@ -450,7 +457,7 @@ func (e *encoder) encodeMap(rv reflect.Value) (Value, error) {
 }
 
 func (e *encoder) encodeStruct(rv reflect.Value) (Value, error) {
-	si := fields.For(rv.Type())
+	si := fields.ForNaming(rv.Type(), e.opts.naming)
 	name := ""
 	if e.opts.structNames {
 		name = si.Name

@@ -43,7 +43,7 @@ type typePlan struct {
 	temps    sync.Pool
 	elem     atomic.Pointer[typePlan]
 	key      atomic.Pointer[typePlan]
-	st       atomic.Pointer[structPlan]
+	st       [fields.NumNamings]atomic.Pointer[structPlan] // by field naming
 }
 
 type structPlan struct {
@@ -93,15 +93,19 @@ func (pl *typePlan) keyPlan() *typePlan {
 	return e
 }
 
-func (pl *typePlan) structPlan() *structPlan {
-	if sp := pl.st.Load(); sp != nil {
+func (pl *typePlan) structPlan(naming fields.Naming) *structPlan {
+	if naming >= fields.NumNamings {
+		naming = fields.Snake
+	}
+	slot := &pl.st[naming]
+	if sp := slot.Load(); sp != nil {
 		return sp
 	}
-	info := fields.For(pl.t)
+	info := fields.ForNaming(pl.t, naming)
 	sp := &structPlan{info: info, plans: make([]atomic.Pointer[typePlan], len(info.Fields))}
-	actual := pl.st.Load()
+	actual := slot.Load()
 	if actual == nil {
-		pl.st.Store(sp)
+		slot.Store(sp)
 		actual = sp
 	}
 	return actual
@@ -966,7 +970,7 @@ func (s *streamer) storeStruct(h *header, rv reflect.Value, pl *typePlan) error 
 			}
 		}
 	}
-	sp := pl.structPlan()
+	sp := pl.structPlan(s.d.opts.naming)
 	si := sp.info
 
 	// unwrap_newtypes: a single field tuple struct written as its inner value.

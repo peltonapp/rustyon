@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/peltonapp/rustyon-go/internal/fields"
 )
 
 // The tests in this file compare the streaming decoder with the tree based
@@ -174,6 +176,8 @@ var streamTargets = []struct {
 	{"opts", func() any { return new([]*[]*string) }},
 	{"embedded", func() any { return new(SEmbedded) }},
 	{"unit", func() any { return new(struct{ A struct{} }) }},
+	{"named", func() any { return new(sNamed) }},
+	{"nameds", func() any { return new([]sNamed) }},
 }
 
 func sameGo(a, b reflect.Value) bool {
@@ -275,14 +279,38 @@ func checkStream(t testing.TB, data []byte, opts decodeOptions) {
 	}
 }
 
+// sNamed has its own naming and an embedded struct with another one.
+type sNamed struct {
+	_        struct{} `ron:"Named,rename_all=camelCase"`
+	FirstOne int
+	Second   []sNamedIn
+	Tagged   string `ron:"Tag_X"`
+	sNamedEm
+}
+
+type sNamedIn struct{ InnerVal int8 }
+
+type sNamedEm struct {
+	_     struct{} `ron:",rename_all=SCREAMING_SNAKE_CASE"`
+	EmVal int
+}
+
 var streamOptionSets = []decodeOptions{
 	{},
 	{disallowUnknown: true},
 	{registry: streamRegistry},
 	{registry: streamRegistry, disallowUnknown: true},
+	{naming: fields.Camel},
+	{naming: fields.Pascal, disallowUnknown: true},
+	{naming: fields.Kebab, registry: streamRegistry},
+	{naming: fields.Identity},
+	{naming: fields.ScreamingSnake, disallowUnknown: true},
 }
 
 var streamSeeds = []string{
+	`Named(firstOne: 1, second: [(InnerVal: 2), (inner_val: 3)], Tag_X: "t", EM_VAL: 4)`,
+	`(first_one: 1, SECOND: [(innerval: 2)], tag_x: "q", emval: 5, extra: 1)`,
+	`[(firstOne: 1), (FIRST-ONE: 2), (r#first-one: 3), (1, [], "x", 2)]`,
 	`(b: true, i: -5, i8: 127, u: 7, u16: 65535, f32: 1.5, f64: -2e3, s: "hi\n", by: b"\x01\x02", l: [1, 2, 3], arr: ["a", "b"], m: {"a": 1, "b": 2}, mi: {1: "x"}, ma: {"k": [1, 'c']}, p: 3, pp: "s", in: (x: 4, why: "w"), pin: (x: 1), nt: Newtype(2.5), pair: (3, "p"), opt: Some([1]), any: [1, 2], val: Foo(1), sh: Circle(radius: 1.0), shapes: [Rect(1, 2), Dot, Label("x"), Circle((radius: 2.0))], col: Green, big: 123456789012345678901234567890, txt: "text", raw: (a: 1), rune: 'x', tup: (1.0, 2), nested: [{"a": [(x: 1)]}], e1: 9, e2: ["z"])`,
 	`Target(b: false, L: [], Arr: ("a", "b"), Unknown: [1, (2)], Nt: 5.0, Pair: Pair(1, "x"))`,
 	`#![enable(implicit_some, unwrap_newtypes, unwrap_variant_newtypes)]

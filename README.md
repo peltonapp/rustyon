@@ -69,6 +69,20 @@ out, err := rustyon.MarshalIndent(c, "", "    ")
 
 Go field names become `snake_case` by default, so Go structs line up with Rust structs without tags. Pointers map to `Option`: `nil` is `None`, anything else is `Some(v)`. The [wiki](https://github.com/peltonapp/rustyon-go/wiki) has the full type mapping.
 
+### Field naming
+
+`snake_case` stays the default. Pick another strategy for a whole encoder or decoder, or per struct with a serde style `rename_all` option on the blank field. Explicit `ron:"name"` tags always win.
+
+```go
+out, err := rustyon.MarshalWith(cfg, rustyon.EncodeOptions{FieldNaming: rustyon.CamelCase})
+err = rustyon.UnmarshalWith(data, &cfg, rustyon.DecodeOptions{FieldNaming: rustyon.CamelCase})
+
+type Window struct {
+    _     struct{} `ron:",rename_all=PascalCase"` // also: camelCase, SCREAMING_SNAKE_CASE, kebab-case, identity, ...
+    Title string                                  // Title
+}
+```
+
 ### Enums
 
 Go has no sum types, so a Rust enum becomes an interface and each variant a type that implements it:
