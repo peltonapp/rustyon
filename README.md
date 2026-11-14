@@ -156,7 +156,7 @@ Examples: `items[0].name`, `.config.port`, `players["alice"]`, `tags[-1]`. `Some
 
 ## Performance
 
-Everything is linear in the input size. Typed `Unmarshal` decodes straight from the text without building an intermediate tree and runs on par with `encoding/json`; parsing into a dynamic tree is about twice as fast as `encoding/json` decoding into `any`; typed `Marshal` is about 2.3x slower than `encoding/json`. A 13 KB file encodes in about 0.13 ms and decodes in about 0.09 ms on an Apple M2. Charts, Big O tables and methodology are on the [Performance](https://github.com/peltonapp/rustyon-go/wiki/Performance) wiki page.
+Everything is linear in the input size. Typed `Unmarshal` decodes straight from the text without building an intermediate tree and runs on par with `encoding/json`; parsing into a dynamic tree is about twice as fast as `encoding/json` decoding into `any`; typed `Marshal` is about 2.3x slower than `encoding/json`. `Format` keeps comments and is several times slower than `json.Indent`. A 13 KB file encodes in about 0.13 ms, decodes in about 0.09 ms and formats in about 0.3 ms on an Apple M2. Charts, Big O tables and methodology are on the [Performance](https://github.com/peltonapp/rustyon-go/wiki/Performance) wiki page.
 
 ## Documentation
 
