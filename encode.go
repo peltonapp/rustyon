@@ -328,7 +328,17 @@ func (e *encoder) internalVariant(rv reflect.Value, name string, rep EnumOptions
 	}
 	switch x := inner.(type) {
 	case Struct:
-		return Struct{Fields: append([]Field{tag}, x.Fields...)}, nil
+		// The inner struct may itself be a variant of an internally tagged
+		// enum with the same tag field. Like serde, the outer tag wins and the
+		// inner one is dropped, so the field is never written twice.
+		out := make([]Field, 1, len(x.Fields)+1)
+		out[0] = tag
+		for _, f := range x.Fields {
+			if f.Name != rep.Tag {
+				out = append(out, f)
+			}
+		}
+		return Struct{Fields: out}, nil
 	case Unit:
 		return Struct{Fields: []Field{tag}}, nil
 	case Map:

@@ -90,6 +90,18 @@ func TestEnumInternallyTaggedEncodeErrors(t *testing.T) {
 	if err != nil || string(out) != `(k:"Box",radius:1.0)` {
 		t.Fatalf("%s %v", out, err)
 	}
+	// When the wrapped struct is a variant of the same enum, its own tag is
+	// dropped instead of writing the tag field twice.
+	r2 := NewRegistry()
+	RegisterEnumWithIn[sTagI](r2, EnumOptions{Tag: "k"}, Variant[tBox]("Box"), Variant[tCircle]("Circle"))
+	out, err = MarshalWith(tBox{C: tCircle{1}}, EncodeOptions{Registry: r2})
+	if err != nil || string(out) != `(k:"Box",radius:1.0)` {
+		t.Fatalf("%s %v", out, err)
+	}
+	var back sTagI
+	if err := UnmarshalWith(out, &back, DecodeOptions{Registry: r2}); err != nil || back != (tBox{C: tCircle{1}}) {
+		t.Fatalf("%#v %v", back, err)
+	}
 }
 
 type tRect2 struct {
