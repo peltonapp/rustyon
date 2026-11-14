@@ -149,7 +149,7 @@ func (p *parser) peek() (syntax.Token, error) {
 }
 
 func (p *parser) errorf(format string, args ...any) error {
-	return syntaxError(syntax.Errorf(p.tok.Pos, format, args...))
+	return syntaxError(syntax.Errorf(p.lex.Resolve(p.tok.Pos), format, args...))
 }
 
 func (p *parser) unexpected(want string) error {

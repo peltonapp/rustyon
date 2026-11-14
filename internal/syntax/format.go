@@ -147,11 +147,11 @@ func newFParser(src []byte) (*fparser, error) {
 		switch t.Kind {
 		case Int:
 			if _, _, err := ParseInt(t); err != nil {
-				return nil, Errorf(t.Pos, "%s", err.Error())
+				return nil, Errorf(l.Resolve(t.Pos), "%s", err.Error())
 			}
 		case Float:
 			if _, err := ParseFloat(t); err != nil {
-				return nil, Errorf(t.Pos, "%s", err.Error())
+				return nil, Errorf(l.Resolve(t.Pos), "%s", err.Error())
 			}
 		}
 		toks = append(toks, ftok{
@@ -182,11 +182,7 @@ func (p *fparser) str(t *ftok) string {
 
 // pos computes the position of a token. It is only needed for errors.
 func (p *fparser) pos(t *ftok) Position {
-	l := NewLexer([]byte(p.src[:t.off]))
-	for l.off < len(l.src) {
-		l.advance()
-	}
-	return l.Pos()
+	return ResolvePosition(p.src, int(t.off))
 }
 
 func (p *fparser) describe(t *ftok) string {

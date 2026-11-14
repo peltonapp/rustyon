@@ -76,7 +76,7 @@ func decodeInto(val Value, v any, opts *decodeOptions) error {
 	if reg == nil {
 		reg = DefaultRegistry
 	}
-	d := &decoder{opts: opts, reg: reg}
+	d := &decoder{opts: opts, reg: reg.load()}
 	return d.decode(val, rv.Elem())
 }
 
@@ -156,23 +156,56 @@ func (dec *Decoder) Decode(v any) error {
 
 type decoder struct {
 	opts *decodeOptions
-	reg  *Registry
-	path []string
+	reg  *registryState
+	path []pathElem
 }
+
+// pathElem is one step of the path to the value being decoded. It is
+// rendered only when an error is reported.
+type pathElem struct {
+	kind  uint8 // pathField, pathIndex, pathKey or pathVariant
+	name  string
+	index int
+	key   Value
+}
+
+const (
+	pathField = iota
+	pathIndex
+	pathKey
+	pathVariant
+)
 
 func (d *decoder) pathString() string {
 	var sb strings.Builder
 	for _, p := range d.path {
-		if !strings.HasPrefix(p, "[") && sb.Len() > 0 {
-			sb.WriteByte('.')
+		switch p.kind {
+		case pathField:
+			if sb.Len() > 0 {
+				sb.WriteByte('.')
+			}
+			sb.WriteString(p.name)
+		case pathIndex:
+			sb.WriteString("[" + strconv.Itoa(p.index) + "]")
+		case pathKey:
+			if p.key == nil {
+				sb.WriteString("{key}")
+			} else {
+				sb.WriteString("[" + keyString(p.key) + "]")
+			}
+		case pathVariant:
+			sb.WriteString("(" + p.name + ")")
 		}
-		sb.WriteString(p)
 	}
 	return sb.String()
 }
 
-func (d *decoder) push(p string) { d.path = append(d.path, p) }
-func (d *decoder) pop()          { d.path = d.path[:len(d.path)-1] }
+func (d *decoder) push(e pathElem)       { d.path = append(d.path, e) }
+func (d *decoder) pushField(name string) { d.push(pathElem{kind: pathField, name: name}) }
+func (d *decoder) pushIndex(i int)       { d.push(pathElem{kind: pathIndex, index: i}) }
+func (d *decoder) pushKey(k Value)       { d.push(pathElem{kind: pathKey, key: k}) }
+func (d *decoder) pushVariant(n string)  { d.push(pathElem{kind: pathVariant, name: n}) }
+func (d *decoder) pop()                  { d.path = d.path[:len(d.path)-1] }
 
 func describeValue(v Value) string {
 	switch v := v.(type) {
@@ -207,7 +240,34 @@ func (d *decoder) decode(v Value, rv reflect.Value) error {
 		rv.Set(reflect.ValueOf(v))
 		return nil
 	}
-	if t.Kind() != reflect.Interface && t.Implements(valueType) && reflect.TypeOf(v) == t {
+	// Fast paths for common scalar targets that cannot have custom methods.
+	if t.PkgPath() == "" {
+		switch t.Kind() {
+		case reflect.String:
+			if s, ok := v.(String); ok {
+				rv.SetString(string(s))
+				return nil
+			}
+		case reflect.Int, reflect.Int64:
+			if i, ok := v.(Int); ok && i.b == nil {
+				rv.SetInt(i.small)
+				return nil
+			}
+		case reflect.Float64:
+			if f, ok := v.(Float); ok {
+				rv.SetFloat(float64(f))
+				return nil
+			}
+		case reflect.Bool:
+			if b, ok := v.(Bool); ok {
+				rv.SetBool(bool(b))
+				return nil
+			}
+		}
+	}
+
+	f := flagsOf(t)
+	if f.value && reflect.TypeOf(v) == t {
 		rv.Set(reflect.ValueOf(v))
 		return nil
 	}
@@ -226,16 +286,16 @@ func (d *decoder) decode(v Value, rv reflect.Value) error {
 		return d.decode(v, rv.Elem())
 	}
 
-	if rv.CanAddr() {
+	if rv.CanAddr() && (f.unmarshaler || f.textUnmarshaler) {
 		pv := rv.Addr()
-		if pv.Type().Implements(unmarshalerType) {
+		if f.unmarshaler {
 			b, err := printDocument(v, &encodeOptions{})
 			if err != nil {
 				return err
 			}
 			return pv.Interface().(Unmarshaler).UnmarshalRON(b)
 		}
-		if t != bigIntType && pv.Type().Implements(textUnmarshalerType) {
+		if t != bigIntType {
 			if d.reg.unitEnum(t) == nil {
 				var text string
 				switch v := v.(type) {
@@ -414,7 +474,7 @@ func (d *decoder) decodeVariantBody(v Value, name string, rv reflect.Value) erro
 		rv.Set(reflect.New(t.Elem()))
 		return d.decodeVariantBody(v, name, rv.Elem())
 	}
-	d.push("(" + name + ")")
+	d.pushVariant(name)
 	defer d.pop()
 	if t.Kind() == reflect.Struct && !hasCustomUnmarshaler(t) {
 		si := fields.For(t)
@@ -455,7 +515,7 @@ func (d *decoder) decodeVariantBody(v Value, name string, rv reflect.Value) erro
 func (d *decoder) decodePlain(v Value, rv reflect.Value) error {
 	tmp := reflect.New(rv.Type()).Elem()
 	saved := d.reg
-	d.reg = registryWithout(saved, rv.Type())
+	d.reg = saved.without(rv.Type())
 	err := d.decode(v, tmp)
 	d.reg = saved
 	if err != nil {
@@ -465,26 +525,9 @@ func (d *decoder) decodePlain(v Value, rv reflect.Value) error {
 	return nil
 }
 
-// registryWithout returns a view of r in which t is not a variant type. It
-// is used to decode the payload of a newtype variant without recursing.
-func registryWithout(r *Registry, t reflect.Type) *Registry {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if _, ok := r.variants[t]; !ok {
-		return r
-	}
-	nr := &Registry{enums: r.enums, units: r.units, variants: map[reflect.Type][]variantRef{}}
-	for k, v := range r.variants {
-		if k != t {
-			nr.variants[k] = v
-		}
-	}
-	return nr
-}
-
 func hasCustomUnmarshaler(t reflect.Type) bool {
-	pt := reflect.PointerTo(t)
-	return pt.Implements(unmarshalerType) || pt.Implements(textUnmarshalerType)
+	f := flagsOf(t)
+	return f.unmarshaler || f.textUnmarshaler
 }
 
 func (d *decoder) elements(v Value) ([]Value, bool) {
@@ -526,7 +569,7 @@ func (d *decoder) decodeSlice(v Value, rv reflect.Value) error {
 	}
 	s := reflect.MakeSlice(t, len(elems), len(elems))
 	for i, e := range elems {
-		d.push("[" + strconv.Itoa(i) + "]")
+		d.pushIndex(i)
 		err := d.decode(e, s.Index(i))
 		d.pop()
 		if err != nil {
@@ -547,7 +590,7 @@ func (d *decoder) decodeArray(v Value, rv reflect.Value) error {
 		return d.typeError(v, t, fmt.Sprintf("expected %d elements, found %d", t.Len(), len(elems)))
 	}
 	for i, e := range elems {
-		d.push("[" + strconv.Itoa(i) + "]")
+		d.pushIndex(i)
 		err := d.decode(e, rv.Index(i))
 		d.pop()
 		if err != nil {
@@ -576,14 +619,14 @@ func (d *decoder) decodeMap(v Value, rv reflect.Value) error {
 	}
 	for _, e := range entries {
 		k := reflect.New(t.Key()).Elem()
-		d.push("{key}")
+		d.pushKey(nil)
 		err := d.decode(e.Key, k)
 		d.pop()
 		if err != nil {
 			return err
 		}
 		ev := reflect.New(t.Elem()).Elem()
-		d.push("[" + keyString(e.Key) + "]")
+		d.pushKey(e.Key)
 		err = d.decode(e.Value, ev)
 		d.pop()
 		if err != nil {
@@ -672,7 +715,7 @@ func (d *decoder) decodeStruct(v Value, rv reflect.Value) error {
 }
 
 func (d *decoder) decodeField(v Value, rv reflect.Value, f *fields.Field) error {
-	d.push(f.Name)
+	d.pushField(f.Name)
 	defer d.pop()
 	fv := fields.ByIndex(rv, f.Index, true)
 	return d.decode(v, fv)
@@ -711,7 +754,7 @@ func (d *decoder) native(v Value) (any, error) {
 	case List:
 		out := make([]any, len(v))
 		for i, e := range v {
-			d.push("[" + strconv.Itoa(i) + "]")
+			d.pushIndex(i)
 			x, err := d.native(e)
 			d.pop()
 			if err != nil {
@@ -725,7 +768,7 @@ func (d *decoder) native(v Value) (any, error) {
 	case Struct:
 		out := make(map[string]any, len(v.Fields))
 		for _, f := range v.Fields {
-			d.push(f.Name)
+			d.pushField(f.Name)
 			x, err := d.native(f.Value)
 			d.pop()
 			if err != nil {

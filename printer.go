@@ -4,6 +4,7 @@
 package rustyon
 
 import (
+	"bytes"
 	"math"
 	"strconv"
 	"strings"
@@ -15,11 +16,12 @@ import (
 
 // printer renders a Value tree as RON text.
 type printer struct {
-	sb     strings.Builder
-	prefix string
-	indent string // empty means compact output
-	level  int
-	err    error
+	sb      bytes.Buffer
+	prefix  string
+	indent  string // empty means compact output
+	level   int
+	err     error
+	scratch [32]byte
 }
 
 func (p *printer) pretty() bool { return p.indent != "" }
@@ -74,11 +76,15 @@ func (p *printer) value(v Value) {
 			p.sb.WriteString("false")
 		}
 	case Int:
-		p.sb.WriteString(v.String())
+		if v.b == nil {
+			p.sb.Write(strconv.AppendInt(p.scratch[:0], v.small, 10))
+		} else {
+			p.sb.WriteString(v.b.String())
+		}
 	case Float:
 		p.sb.WriteString(formatFloat(float64(v), 64))
 	case String:
-		p.sb.WriteString(quoteString(string(v)))
+		writeQuoted(&p.sb, string(v))
 	case Char:
 		p.sb.WriteString(quoteChar(rune(v)))
 	case Bytes:
@@ -195,26 +201,37 @@ func formatFloat(f float64, bits int) string {
 	return s
 }
 
-func quoteString(s string) string {
-	var sb strings.Builder
-	sb.Grow(len(s) + 2)
+// writeQuoted writes s as a double quoted RON string.
+func writeQuoted(sb *bytes.Buffer, s string) {
 	sb.WriteByte('"')
-	for _, r := range s {
-		writeEscaped(&sb, r, '"')
+	// Fast path: printable ASCII without quotes or backslashes needs no
+	// escaping, which is the common case for keys and names.
+	plain := true
+	for i := range len(s) {
+		if c := s[i]; c < 0x20 || c >= 0x7F || c == '"' || c == '\\' {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		sb.WriteString(s)
+	} else {
+		for _, r := range s {
+			writeEscaped(sb, r, '"')
+		}
 	}
 	sb.WriteByte('"')
-	return sb.String()
 }
 
 func quoteChar(r rune) string {
-	var sb strings.Builder
+	var sb bytes.Buffer
 	sb.WriteByte('\'')
 	writeEscaped(&sb, r, '\'')
 	sb.WriteByte('\'')
 	return sb.String()
 }
 
-func writeEscaped(sb *strings.Builder, r rune, quote rune) {
+func writeEscaped(sb *bytes.Buffer, r rune, quote rune) {
 	switch r {
 	case quote, '\\':
 		sb.WriteByte('\\')

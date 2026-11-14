@@ -5,8 +5,10 @@ package rustyon
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"sync"
+	"sync/atomic"
 )
 
 // Registry maps Go types to Rust style enums. Go has no sum types, so an
@@ -40,9 +42,16 @@ import (
 //
 // Most programs use [DefaultRegistry] through the package level Register
 // functions. A separate Registry can be passed to an [Encoder] or [Decoder].
-// A Registry is safe for concurrent use.
+// A Registry is safe for concurrent use. Lookups are lock free; registering
+// is meant to happen at program start.
 type Registry struct {
-	mu       sync.RWMutex
+	mu    sync.Mutex // serializes writers
+	state atomic.Pointer[registryState]
+}
+
+// registryState is an immutable snapshot. Writers copy it, modify the copy
+// and publish it atomically.
+type registryState struct {
 	enums    map[reflect.Type]*enumInfo     // interface type to enum
 	variants map[reflect.Type][]variantRef  // variant type to its enums
 	units    map[reflect.Type]*unitEnumInfo // unit enum type to names
@@ -55,8 +64,8 @@ type enumInfo struct {
 }
 
 type variantRef struct {
-	enum *enumInfo
-	name string
+	iface reflect.Type
+	name  string
 }
 
 type unitEnumInfo struct {
@@ -77,18 +86,29 @@ func Variant[T any](name string) VariantSpec {
 	return VariantSpec{name: name, typ: reflect.TypeFor[T]()}
 }
 
+var emptyState = &registryState{
+	enums:    map[reflect.Type]*enumInfo{},
+	variants: map[reflect.Type][]variantRef{},
+	units:    map[reflect.Type]*unitEnumInfo{},
+}
+
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry {
-	return &Registry{
-		enums:    map[reflect.Type]*enumInfo{},
-		variants: map[reflect.Type][]variantRef{},
-		units:    map[reflect.Type]*unitEnumInfo{},
-	}
+	r := &Registry{}
+	r.state.Store(emptyState)
+	return r
 }
 
 // DefaultRegistry is the registry used by [Marshal], [Unmarshal] and by
 // encoders and decoders that have no registry set.
 var DefaultRegistry = NewRegistry()
+
+func (r *Registry) load() *registryState {
+	if s := r.state.Load(); s != nil {
+		return s
+	}
+	return emptyState
+}
 
 // RegisterEnum registers the interface type I as an enum with the given
 // variants in [DefaultRegistry]. It panics if I is not an interface type, if
@@ -111,9 +131,11 @@ func (r *Registry) registerEnum(iface reflect.Type, variants []VariantSpec) erro
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	info := r.enums[iface]
-	if info == nil {
-		info = &enumInfo{iface: iface, byName: map[string]reflect.Type{}, byType: map[reflect.Type]string{}}
+	old := r.load()
+	info := &enumInfo{iface: iface, byName: map[string]reflect.Type{}, byType: map[reflect.Type]string{}}
+	if prev := old.enums[iface]; prev != nil {
+		maps.Copy(info.byName, prev.byName)
+		maps.Copy(info.byType, prev.byType)
 	}
 	for _, v := range variants {
 		if v.typ == nil {
@@ -137,20 +159,29 @@ func (r *Registry) registerEnum(iface reflect.Type, variants []VariantSpec) erro
 		info.byName[v.name] = v.typ
 		info.byType[v.typ] = v.name
 	}
-	r.enums[iface] = info
+
+	next := &registryState{
+		enums:    maps.Clone(old.enums),
+		variants: map[reflect.Type][]variantRef{},
+		units:    old.units,
+	}
+	next.enums[iface] = info
 	// Rebuild the reverse index for this enum.
-	for t, refs := range r.variants {
-		kept := refs[:0]
+	for t, refs := range old.variants {
+		var kept []variantRef
 		for _, ref := range refs {
-			if ref.enum != info {
+			if ref.iface != iface {
 				kept = append(kept, ref)
 			}
 		}
-		r.variants[t] = kept
+		if len(kept) > 0 {
+			next.variants[t] = kept
+		}
 	}
 	for t, name := range info.byType {
-		r.variants[t] = append(r.variants[t], variantRef{enum: info, name: name})
+		next.variants[t] = append(next.variants[t], variantRef{iface: iface, name: name})
 	}
+	r.state.Store(next)
 	return nil
 }
 
@@ -177,33 +208,31 @@ func RegisterUnitEnumIn[T comparable](r *Registry, names map[T]string) {
 		info.byValue[v] = name
 	}
 	r.mu.Lock()
-	r.units[t] = info
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	old := r.load()
+	next := &registryState{enums: old.enums, variants: old.variants, units: maps.Clone(old.units)}
+	next.units[t] = info
+	r.state.Store(next)
 }
 
-func (r *Registry) enum(iface reflect.Type) *enumInfo {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.enums[iface]
-}
+func (s *registryState) enum(iface reflect.Type) *enumInfo { return s.enums[iface] }
 
-func (r *Registry) unitEnum(t reflect.Type) *unitEnumInfo {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.units[t]
-}
+func (s *registryState) unitEnum(t reflect.Type) *unitEnumInfo { return s.units[t] }
 
 // variantName returns the variant name for a concrete type. When static is
 // a registered enum interface its name wins, otherwise the type must belong
 // to exactly one enum.
-func (r *Registry) variantName(t reflect.Type, static reflect.Type) (string, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if info := r.enums[static]; static != nil && info != nil {
-		name, ok := info.byType[t]
-		return name, ok
+func (s *registryState) variantName(t reflect.Type, static reflect.Type) (string, bool) {
+	if len(s.variants) == 0 {
+		return "", false
 	}
-	refs := r.variants[t]
+	if static != nil {
+		if info := s.enums[static]; info != nil {
+			name, ok := info.byType[t]
+			return name, ok
+		}
+	}
+	refs := s.variants[t]
 	if len(refs) == 0 {
 		return "", false
 	}
@@ -214,4 +243,15 @@ func (r *Registry) variantName(t reflect.Type, static reflect.Type) (string, boo
 		}
 	}
 	return name, true
+}
+
+// without returns a view of s in which t is not a variant type. It is used
+// to decode the payload of a newtype variant without recursing.
+func (s *registryState) without(t reflect.Type) *registryState {
+	if _, ok := s.variants[t]; !ok {
+		return s
+	}
+	next := &registryState{enums: s.enums, units: s.units, variants: maps.Clone(s.variants)}
+	delete(next.variants, t)
+	return next
 }

@@ -133,39 +133,61 @@ func (t Token) Describe() string {
 }
 
 // Lexer splits RON source into tokens.
+//
+// To keep lexing fast, token positions carry only the byte offset. Line
+// and column are computed by [Lexer.Resolve] when an error is reported;
+// errors returned by [Lexer.Next] are already resolved.
 type Lexer struct {
-	src  string
-	off  int
-	line int
-	col  int
+	src string
+	off int
 }
 
 // NewLexer returns a lexer for src. A leading UTF-8 byte order mark is
 // skipped.
 func NewLexer(src []byte) *Lexer {
-	l := &Lexer{src: string(src), line: 1, col: 1}
+	l := &Lexer{src: string(src)}
 	if strings.HasPrefix(l.src, "\xEF\xBB\xBF") {
 		l.off = 3
 	}
 	return l
 }
 
-// Pos returns the current position.
-func (l *Lexer) Pos() Position { return Position{Offset: l.off, Line: l.line, Column: l.col} }
+// Pos returns the current position. Only the offset is set.
+func (l *Lexer) Pos() Position { return Position{Offset: l.off} }
+
+// Resolve fills in the line and column of a position from its offset.
+func (l *Lexer) Resolve(p Position) Position {
+	return ResolvePosition(l.src, p.Offset)
+}
+
+// ResolvePosition computes the full position of a byte offset in src.
+func ResolvePosition(src string, off int) Position {
+	off = min(off, len(src))
+	head := src[:off]
+	line := 1 + strings.Count(head, "\n")
+	lineStart := strings.LastIndexByte(head, '\n') + 1
+	if line == 1 && strings.HasPrefix(head, "\xEF\xBB\xBF") {
+		lineStart = 3
+	}
+	col := 1 + utf8.RuneCountInString(head[lineStart:])
+	return Position{Offset: off, Line: line, Column: col}
+}
 
 // CheckUTF8 returns an error at the first invalid UTF-8 sequence in src.
 func CheckUTF8(src []byte) *Error {
 	if utf8.Valid(src) {
 		return nil
 	}
-	l := NewLexer(src)
-	for l.off < len(l.src) {
-		if r, size := utf8.DecodeRuneInString(l.src[l.off:]); r == utf8.RuneError && size == 1 {
+	s := string(src)
+	off := 0
+	for off < len(s) {
+		r, size := utf8.DecodeRuneInString(s[off:])
+		if r == utf8.RuneError && size == 1 {
 			break
 		}
-		l.advance()
+		off += size
 	}
-	return Errorf(l.Pos(), "invalid UTF-8 encoding")
+	return Errorf(ResolvePosition(s, off), "invalid UTF-8 encoding")
 }
 
 // peekAt returns the rune at off+n bytes, or -1 at end of input.
@@ -188,17 +210,12 @@ func (l *Lexer) advance() rune {
 	if l.off >= len(l.src) {
 		return -1
 	}
-	r, size := rune(l.src[l.off]), 1
-	if r >= utf8.RuneSelf {
-		r, size = utf8.DecodeRuneInString(l.src[l.off:])
+	if c := l.src[l.off]; c < utf8.RuneSelf {
+		l.off++
+		return rune(c)
 	}
+	r, size := utf8.DecodeRuneInString(l.src[l.off:])
 	l.off += size
-	if r == '\n' {
-		l.line++
-		l.col = 1
-	} else {
-		l.col++
-	}
 	return r
 }
 
@@ -243,6 +260,9 @@ func (l *Lexer) Next() (Token, error) {
 	start := l.Pos()
 	tok, err := l.scan(start)
 	if err != nil {
+		if e, ok := err.(*Error); ok {
+			e.Pos = l.Resolve(e.Pos)
+		}
 		return Token{}, err
 	}
 	tok.Pos = start

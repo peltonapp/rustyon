@@ -34,8 +34,12 @@ func TestLexerTokens(t *testing.T) {
 			t.Errorf("token %d: %v, want %v", i, toks[i].Kind, k)
 		}
 	}
-	if toks[3].Newlines != 1 || toks[3].Pos.Line != 2 || toks[3].Pos.Column != 3 {
-		t.Errorf("x position: %+v newlines %d", toks[3].Pos, toks[3].Newlines)
+	src := "Point( // c\n  x: -0x1Fu8, /* b */ r#type: r\"s\")"
+	if p := ResolvePosition(src, toks[3].Pos.Offset); toks[3].Newlines != 1 || p.Line != 2 || p.Column != 3 {
+		t.Errorf("x position: %+v newlines %d", p, toks[3].Newlines)
+	}
+	if p := ResolvePosition("\xEF\xBB\xBFab", 4); p.Line != 1 || p.Column != 2 {
+		t.Errorf("BOM position: %+v", p)
 	}
 	if toks[5].Str != "-0x1F" || toks[5].Suffix != "u8" {
 		t.Errorf("int token: %+v", toks[5])

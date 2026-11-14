@@ -26,6 +26,7 @@ var (
 	marshalerType     = reflect.TypeFor[Marshaler]()
 	textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
 	valueType         = reflect.TypeFor[Value]()
+	stringType        = reflect.TypeFor[string]()
 	bigIntType        = reflect.TypeFor[big.Int]()
 )
 
@@ -101,7 +102,7 @@ func printDocument(val Value, opts *encodeOptions) ([]byte, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
-	return []byte(p.sb.String()), nil
+	return p.sb.Bytes(), nil
 }
 
 // ToValue converts a Go value into a [Value] tree using the same rules as
@@ -115,7 +116,7 @@ func toValue(v any, opts *encodeOptions) (Value, error) {
 	if reg == nil {
 		reg = DefaultRegistry
 	}
-	e := &encoder{opts: opts, reg: reg}
+	e := &encoder{opts: opts, reg: reg.load()}
 	return e.encode(reflect.ValueOf(v))
 }
 
@@ -168,7 +169,7 @@ func (enc *Encoder) Encode(v any) error {
 
 type encoder struct {
 	opts  *encodeOptions
-	reg   *Registry
+	reg   *registryState
 	depth int
 }
 
@@ -232,11 +233,7 @@ func (e *encoder) encodeVariant(rv reflect.Value, name string) (Value, error) {
 	return Tuple{Name: name, Values: []Value{inner}}, nil
 }
 
-func hasCustomMarshaler(t reflect.Type) bool {
-	pt := reflect.PointerTo(t)
-	return t.Implements(marshalerType) || pt.Implements(marshalerType) ||
-		t.Implements(textMarshalerType) || pt.Implements(textMarshalerType)
-}
+func hasCustomMarshaler(t reflect.Type) bool { return flagsOf(t).customEnc }
 
 // addressable returns a pointer to rv, copying it when it is not
 // addressable, so that pointer receiver methods can be called.
@@ -262,7 +259,30 @@ func (e *encoder) encodePlain(rv reflect.Value) (Value, error) {
 		}
 		return Ident(name), nil
 	}
-	if t.Kind() != reflect.Pointer && t.Implements(valueType) {
+
+	// Plain scalars cannot implement any interface we care about, so they
+	// skip the checks below.
+	switch t.Kind() {
+	case reflect.String:
+		if t == stringType {
+			return String(rv.String()), nil
+		}
+	case reflect.Int, reflect.Int64:
+		if t.PkgPath() == "" {
+			return NewInt(rv.Int()), nil
+		}
+	case reflect.Float64:
+		if t.PkgPath() == "" {
+			return Float(rv.Float()), nil
+		}
+	case reflect.Bool:
+		if t.PkgPath() == "" {
+			return Bool(rv.Bool()), nil
+		}
+	}
+
+	f := flagsOf(t)
+	if f.value {
 		return rv.Interface().(Value), nil
 	}
 	if t == bigIntType {
@@ -275,16 +295,14 @@ func (e *encoder) encodePlain(rv reflect.Value) (Value, error) {
 		return NewBigInt(rv.Interface().(*big.Int)), nil
 	}
 
-	if t.Implements(marshalerType) {
+	switch {
+	case f.marshaler:
 		return e.callMarshaler(rv)
-	}
-	if t.Kind() != reflect.Pointer && reflect.PointerTo(t).Implements(marshalerType) {
+	case f.ptrMarshaler:
 		return e.callMarshaler(addressable(rv))
-	}
-	if t.Implements(textMarshalerType) {
+	case f.text:
 		return e.callTextMarshaler(rv)
-	}
-	if t.Kind() != reflect.Pointer && reflect.PointerTo(t).Implements(textMarshalerType) {
+	case f.ptrText:
 		return e.callTextMarshaler(addressable(rv))
 	}
 
@@ -382,6 +400,14 @@ func (e *encoder) encodeMap(rv reflect.Value) (Value, error) {
 		MapEntry
 	}
 	entries := make([]entry, 0, rv.Len())
+	// Strings and integers sort by value. Other keys, and maps whose keys
+	// may mix kinds, sort by their RON text, which is only computed then.
+	needText := true
+	switch kt := rv.Type().Key(); kt.Kind() {
+	case reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		needText = e.reg.unitEnum(kt) != nil || hasCustomMarshaler(kt)
+	}
 	iter := rv.MapRange()
 	for iter.Next() {
 		k, err := e.encode(iter.Key())
@@ -392,15 +418,23 @@ func (e *encoder) encodeMap(rv reflect.Value) (Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		p := &printer{}
-		p.value(k)
-		entries = append(entries, entry{sortKey: p.sb.String(), MapEntry: MapEntry{Key: k, Value: v}})
+		en := entry{MapEntry: MapEntry{Key: k, Value: v}}
+		if needText {
+			p := &printer{}
+			p.value(k)
+			en.sortKey = p.sb.String()
+		}
+		entries = append(entries, en)
 	}
 	slices.SortFunc(entries, func(a, b entry) int {
-		// Sort integers numerically, everything else by its RON text.
-		if ai, ok := a.Key.(Int); ok {
-			if bi, ok := b.Key.(Int); ok {
-				return ai.Cmp(bi)
+		switch ak := a.Key.(type) {
+		case String:
+			if bk, ok := b.Key.(String); ok {
+				return cmp.Compare(ak, bk)
+			}
+		case Int:
+			if bk, ok := b.Key.(Int); ok {
+				return ak.Cmp(bk)
 			}
 		}
 		return cmp.Compare(a.sortKey, b.sortKey)
