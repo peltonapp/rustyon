@@ -1,2 +1,12 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Keep LF on every platform so golden files and tests match on Windows.
+*.go   text eol=lf
+*.ron  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+Makefile text eol=lf
+
+*.svg text eol=lf
