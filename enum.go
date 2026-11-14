@@ -61,6 +61,74 @@ type enumInfo struct {
 	iface  reflect.Type
 	byName map[string]reflect.Type
 	byType map[reflect.Type]string
+	order  []string // variant names in registration order
+	rep    EnumOptions
+}
+
+// enumRep is the representation of an enum, as selected by [EnumOptions].
+type enumRep uint8
+
+const (
+	repExternal enumRep = iota
+	repInternal
+	repAdjacent
+	repUntagged
+)
+
+func (o EnumOptions) rep() enumRep {
+	switch {
+	case o.Untagged:
+		return repUntagged
+	case o.Content != "":
+		return repAdjacent
+	case o.Tag != "":
+		return repInternal
+	}
+	return repExternal
+}
+
+// EnumOptions selects how the variants of an enum are written, using serde's
+// names for the representations. The zero value is the default external
+// representation of RON, as used by [RegisterEnum]: Circle(radius: 1.0).
+//
+//   - Tag only (internally tagged): the variant is a struct that has an
+//     extra field with the variant name as a string. Circle becomes
+//     (type: "Circle", radius: 1.0), a unit variant (type: "Empty").
+//     Variants must be structs, or newtypes around a struct or a map with
+//     string keys, as in serde. Tuple variants cannot be encoded.
+//   - Tag and Content (adjacently tagged): (t: Circle, c: (radius: 1.0)),
+//     with the tag as an identifier like serde writes it. Unit variants omit
+//     the content: (t: Empty). Decoding accepts the tag as a string too.
+//   - Untagged: the variant is written as its content alone, (radius: 1.0).
+//     Decoding tries the variants in registration order and takes the first
+//     that fits: a struct variant fits when the input has all of its fields,
+//     except pointer, interface, omitempty and omitzero fields, which may be
+//     missing. Unit variants fit () only.
+//
+// The tag and content names must be valid identifiers and different from
+// each other, and a tagged struct variant must not have a field of the same
+// name as the tag. A type that is a variant of several enums with different
+// representations or names is only treated as a variant when it is stored in
+// one of their interfaces, not when it is encoded or decoded on its own.
+type EnumOptions struct {
+	Tag      string
+	Content  string
+	Untagged bool
+}
+
+// problem describes what is wrong with the options, or returns "".
+func (o EnumOptions) problem() string {
+	switch {
+	case o.Untagged && (o.Tag != "" || o.Content != ""):
+		return "Untagged cannot be combined with Tag or Content"
+	case o.Content != "" && o.Tag == "":
+		return "Content requires Tag"
+	case o.Tag != "" && !isRawIdent(o.Tag), o.Content != "" && !isRawIdent(o.Content):
+		return "Tag and Content must be valid identifiers"
+	case o.Tag != "" && o.Tag == o.Content:
+		return "Tag and Content must differ"
+	}
+	return ""
 }
 
 type variantRef struct {
@@ -120,22 +188,50 @@ func RegisterEnum[I any](variants ...VariantSpec) {
 
 // RegisterEnumIn is like [RegisterEnum] but registers into r.
 func RegisterEnumIn[I any](r *Registry, variants ...VariantSpec) {
-	if err := r.registerEnum(reflect.TypeFor[I](), variants); err != nil {
+	RegisterEnumWithIn[I](r, EnumOptions{}, variants...)
+}
+
+// RegisterEnumWith is like [RegisterEnum] with a choice of representation,
+// such as the internally tagged enums serde produces with
+// #[serde(tag = "type")]:
+//
+//	rustyon.RegisterEnumWith[Shape](rustyon.EnumOptions{Tag: "type"},
+//		rustyon.Variant[Circle]("Circle"),
+//		rustyon.Variant[Empty]("Empty"),
+//	)
+//
+// It panics for invalid options and, in addition to the cases of
+// [RegisterEnum], when the interface is already registered with another
+// representation.
+func RegisterEnumWith[I any](opts EnumOptions, variants ...VariantSpec) {
+	RegisterEnumWithIn[I](DefaultRegistry, opts, variants...)
+}
+
+// RegisterEnumWithIn is like [RegisterEnumWith] but registers into r.
+func RegisterEnumWithIn[I any](r *Registry, opts EnumOptions, variants ...VariantSpec) {
+	if err := r.registerEnum(reflect.TypeFor[I](), opts, variants); err != nil {
 		panic(err)
 	}
 }
 
-func (r *Registry) registerEnum(iface reflect.Type, variants []VariantSpec) error {
+func (r *Registry) registerEnum(iface reflect.Type, opts EnumOptions, variants []VariantSpec) error {
 	if iface.Kind() != reflect.Interface {
 		return fmt.Errorf("rustyon: RegisterEnum: %s is not an interface type", iface)
+	}
+	if msg := opts.problem(); msg != "" {
+		return fmt.Errorf("rustyon: RegisterEnum %s: %s", iface, msg)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	old := r.load()
-	info := &enumInfo{iface: iface, byName: map[string]reflect.Type{}, byType: map[reflect.Type]string{}}
+	info := &enumInfo{iface: iface, byName: map[string]reflect.Type{}, byType: map[reflect.Type]string{}, rep: opts}
 	if prev := old.enums[iface]; prev != nil {
+		if prev.rep != opts {
+			return fmt.Errorf("rustyon: RegisterEnum %s: already registered with another representation", iface)
+		}
 		maps.Copy(info.byName, prev.byName)
 		maps.Copy(info.byType, prev.byType)
+		info.order = append(info.order, prev.order...)
 	}
 	for _, v := range variants {
 		if v.typ == nil {
@@ -155,6 +251,9 @@ func (r *Registry) registerEnum(iface reflect.Type, variants []VariantSpec) erro
 		}
 		if n, ok := info.byType[v.typ]; ok && n != v.name {
 			return fmt.Errorf("rustyon: RegisterEnum %s: type %s registered twice", iface, v.typ)
+		}
+		if _, seen := info.byName[v.name]; !seen {
+			info.order = append(info.order, v.name)
 		}
 		info.byName[v.name] = v.typ
 		info.byType[v.typ] = v.name
@@ -223,26 +322,35 @@ func (s *registryState) unitEnum(t reflect.Type) *unitEnumInfo { return s.units[
 // a registered enum interface its name wins, otherwise the type must belong
 // to exactly one enum.
 func (s *registryState) variantName(t reflect.Type, static reflect.Type) (string, bool) {
+	name, _, ok := s.variantOf(t, static)
+	return name, ok
+}
+
+// variantOf is like variantName and also returns the enum the variant
+// belongs to. A type in several enums that disagree on the name or the
+// representation is not a variant.
+func (s *registryState) variantOf(t reflect.Type, static reflect.Type) (string, *enumInfo, bool) {
 	if len(s.variants) == 0 {
-		return "", false
+		return "", nil, false
 	}
 	if static != nil {
 		if info := s.enums[static]; info != nil {
 			name, ok := info.byType[t]
-			return name, ok
+			return name, info, ok
 		}
 	}
 	refs := s.variants[t]
 	if len(refs) == 0 {
-		return "", false
+		return "", nil, false
 	}
 	name := refs[0].name
+	info := s.enums[refs[0].iface]
 	for _, ref := range refs[1:] {
-		if ref.name != name {
-			return "", false
+		if ref.name != name || s.enums[ref.iface].rep != info.rep {
+			return "", nil, false
 		}
 	}
-	return name, true
+	return name, info, true
 }
 
 // without returns a view of s in which t is not a variant type. It is used

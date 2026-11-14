@@ -248,6 +248,35 @@ func ExampleEncoder() {
 	// Output: #![enable(implicit_some)]Window(title:"main",width:640)
 }
 
+type exAnimal interface{ isAnimal() }
+
+type exDog struct{ Name string }
+type exFish struct{ Fins int }
+
+func (exDog) isAnimal()  {}
+func (exFish) isAnimal() {}
+
+func ExampleRegisterEnumWithIn() {
+	reg := rustyon.NewRegistry()
+	// Like #[serde(tag = "type")] in Rust.
+	rustyon.RegisterEnumWithIn[exAnimal](reg, rustyon.EnumOptions{Tag: "type"},
+		rustyon.Variant[exDog]("Dog"),
+		rustyon.Variant[exFish]("Fish"),
+	)
+	out, err := rustyon.MarshalWith([]exAnimal{exDog{"Rex"}, exFish{2}}, rustyon.EncodeOptions{Registry: reg})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(out))
+
+	var animals []exAnimal
+	err = rustyon.UnmarshalWith(out, &animals, rustyon.DecodeOptions{Registry: reg})
+	fmt.Println(animals, err)
+	// Output:
+	// [(type:"Dog",name:"Rex"),(type:"Fish",fins:2)]
+	// [{Rex} {2}] <nil>
+}
+
 func ExampleMarshal_flatten() {
 	type Common struct {
 		ID   int

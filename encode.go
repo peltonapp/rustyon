@@ -218,42 +218,124 @@ func (e *encoder) encodeConcrete(rv reflect.Value, static reflect.Type) (Value, 
 		return nil, &UnsupportedValueError{Value: rv, Msg: "exceeded maximum nesting depth, possibly a cycle"}
 	}
 	t := rv.Type()
-	if name, ok := e.reg.variantName(t, static); ok {
-		return e.encodeVariant(rv, name)
+	if name, info, ok := e.reg.variantOf(t, static); ok {
+		return e.encodeVariant(rv, name, info)
 	}
 	return e.encodePlain(rv)
 }
 
-func (e *encoder) encodeVariant(rv reflect.Value, name string) (Value, error) {
+// variantKind is the shape of an enum variant.
+type variantKind uint8
+
+const (
+	variantUnit variantKind = iota
+	variantStruct
+	variantTuple
+	variantNewtype
+)
+
+func (e *encoder) encodeVariant(rv reflect.Value, name string, info *enumInfo) (Value, error) {
 	if rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
 			return None, nil
 		}
 		rv = rv.Elem()
 	}
+	var (
+		kind  variantKind
+		flds  []Field
+		vals  []Value
+		inner Value
+		err   error
+	)
 	if rv.Kind() == reflect.Struct && !hasCustomMarshaler(rv.Type()) {
 		si := fields.ForNaming(rv.Type(), e.opts.naming)
-		if len(si.Fields) == 0 && si.Extra == nil {
-			return Ident(name), nil
+		switch {
+		case len(si.Fields) == 0 && si.Extra == nil:
+			kind = variantUnit
+		case si.Tuple:
+			kind = variantTuple
+			vals, err = e.tupleValues(rv, si)
+		default:
+			kind = variantStruct
+			flds, err = e.structFields(rv, si)
 		}
-		if si.Tuple {
-			vals, err := e.tupleValues(rv, si)
-			if err != nil {
-				return nil, err
-			}
-			return Tuple{Name: name, Values: vals}, nil
-		}
-		fields, err := e.structFields(rv, si)
-		if err != nil {
-			return nil, err
-		}
-		return Struct{Name: name, Fields: fields}, nil
+	} else {
+		kind = variantNewtype
+		inner, err = e.encodePlain(rv)
 	}
-	inner, err := e.encodePlain(rv)
 	if err != nil {
 		return nil, err
 	}
+
+	rep := info.rep
+	switch rep.rep() {
+	case repInternal:
+		return e.internalVariant(rv, name, rep, kind, flds, vals, inner)
+	case repAdjacent:
+		// serde writes the tag of an adjacently tagged enum as a variant
+		// identifier, in contrast to internally tagged enums.
+		tag := Field{Name: rep.Tag, Value: Ident(name)}
+		switch kind {
+		case variantUnit:
+			return Struct{Fields: []Field{tag}}, nil
+		case variantStruct:
+			inner = Struct{Fields: flds}
+		case variantTuple:
+			inner = Tuple{Values: vals}
+		}
+		return Struct{Fields: []Field{tag, {Name: rep.Content, Value: inner}}}, nil
+	case repUntagged:
+		switch kind {
+		case variantUnit:
+			return Unit{}, nil
+		case variantStruct:
+			return Struct{Fields: flds}, nil
+		case variantTuple:
+			return Tuple{Values: vals}, nil
+		}
+		return inner, nil
+	}
+	switch kind {
+	case variantUnit:
+		return Ident(name), nil
+	case variantStruct:
+		return Struct{Name: name, Fields: flds}, nil
+	case variantTuple:
+		return Tuple{Name: name, Values: vals}, nil
+	}
 	return Tuple{Name: name, Values: []Value{inner}}, nil
+}
+
+// internalVariant writes a variant of an internally tagged enum: the fields
+// of the variant preceded by the tag field.
+func (e *encoder) internalVariant(rv reflect.Value, name string, rep EnumOptions, kind variantKind, flds []Field, vals []Value, inner Value) (Value, error) {
+	tag := Field{Name: rep.Tag, Value: String(name)}
+	fail := func(msg string) (Value, error) {
+		return nil, &UnsupportedValueError{Value: rv, Msg: "variant " + name + " of an internally tagged enum " + msg}
+	}
+	if kind == variantTuple {
+		if len(vals) != 1 {
+			return fail("cannot be a tuple")
+		}
+		kind, inner = variantNewtype, vals[0]
+	}
+	switch kind {
+	case variantUnit:
+		return Struct{Fields: []Field{tag}}, nil
+	case variantStruct:
+		return Struct{Fields: append([]Field{tag}, flds...)}, nil
+	}
+	switch x := inner.(type) {
+	case Struct:
+		return Struct{Fields: append([]Field{tag}, x.Fields...)}, nil
+	case Unit:
+		return Struct{Fields: []Field{tag}}, nil
+	case Map:
+		out := Map{{Key: String(rep.Tag), Value: String(name)}}
+		return append(out, x...), nil
+	}
+	return fail("must contain a struct or a map")
 }
 
 func hasCustomMarshaler(t reflect.Type) bool { return flagsOf(t).customEnc }

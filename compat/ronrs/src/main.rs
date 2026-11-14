@@ -12,8 +12,11 @@
 //!   once pretty, separated by a line with `---`.
 //! * `check`: read RON from stdin, deserialize it into the typed fixture and
 //!   exit 0 only if it equals the expected fixture value.
+//! * `tagged` and `tagged-check`: the same for a fixture of serde enums with
+//!   internally tagged, adjacently tagged and untagged representations.
 
 mod fixture;
+mod tagged;
 
 use std::io::{self, BufRead, Read, Write};
 
@@ -29,8 +32,14 @@ fn main() {
             io::stdin().read_to_string(&mut input).expect("read stdin");
             std::process::exit(fixture::check(&input));
         }
+        "tagged" => tagged::print(),
+        "tagged-check" => {
+            let mut input = String::new();
+            io::stdin().read_to_string(&mut input).expect("read stdin");
+            std::process::exit(tagged::check(&input));
+        }
         _ => {
-            eprintln!("usage: ronrs-oracle serve|fixture|check");
+            eprintln!("usage: ronrs-oracle serve|fixture|check|tagged|tagged-check");
             std::process::exit(2);
         }
     }

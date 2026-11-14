@@ -137,6 +137,62 @@ var streamRegistry = func() *Registry {
 	return r
 }()
 
+// Tagged enum representations.
+type (
+	sTagI interface{ sTagI() }
+	sTagA interface{ sTagA() }
+	sTagU interface{ sTagU() }
+
+	tCircle struct{ Radius float64 }
+	tPoly   struct {
+		Sides uint8
+		Name  *string
+	}
+	tRect struct {
+		_ struct{} `ron:",tuple"`
+		W uint8
+		H uint8
+	}
+	tLabel string
+	tDot   struct{}
+	tMap   map[string]int
+)
+
+func (tCircle) sTagI() {}
+func (tPoly) sTagI()   {}
+func (tDot) sTagI()    {}
+func (tMap) sTagI()    {}
+func (tCircle) sTagA() {}
+func (tRect) sTagA()   {}
+func (tLabel) sTagA()  {}
+func (tDot) sTagA()    {}
+func (tCircle) sTagU() {}
+func (tPoly) sTagU()   {}
+func (tRect) sTagU()   {}
+func (tLabel) sTagU()  {}
+func (tDot) sTagU()    {}
+
+type sTagged struct {
+	I  sTagI
+	A  sTagA
+	U  sTagU
+	Is []sTagI
+	As []sTagA
+	Us []sTagU
+	C  tCircle
+}
+
+var streamTagRegistry = func() *Registry {
+	r := NewRegistry()
+	RegisterEnumWithIn[sTagI](r, EnumOptions{Tag: "kind"},
+		Variant[tCircle]("Circle"), Variant[tPoly]("Poly"), Variant[tDot]("Dot"), Variant[tMap]("Map"))
+	RegisterEnumWithIn[sTagA](r, EnumOptions{Tag: "t", Content: "c"},
+		Variant[tCircle]("Circle"), Variant[tRect]("Rect"), Variant[tLabel]("Label"), Variant[tDot]("Dot"))
+	RegisterEnumWithIn[sTagU](r, EnumOptions{Untagged: true},
+		Variant[tCircle]("Circle"), Variant[tPoly]("Poly"), Variant[tRect]("Rect"), Variant[tLabel]("Label"), Variant[tDot]("Dot"))
+	return r
+}()
+
 var streamTargets = []struct {
 	name string
 	mk   func() any
@@ -176,6 +232,11 @@ var streamTargets = []struct {
 	{"opts", func() any { return new([]*[]*string) }},
 	{"embedded", func() any { return new(SEmbedded) }},
 	{"unit", func() any { return new(struct{ A struct{} }) }},
+	{"tagged", func() any { return new(sTagged) }},
+	{"tagi", func() any { return new(sTagI) }},
+	{"taga", func() any { return new([]sTagA) }},
+	{"tagu", func() any { return new([]sTagU) }},
+	{"tagcircle", func() any { return new(tCircle) }},
 	{"flat", func() any { return new(sFlat) }},
 	{"flats", func() any { return new([]sFlat) }},
 	{"flatmap", func() any { return new(sFlatMap) }},
@@ -340,6 +401,8 @@ var streamOptionSets = []decodeOptions{
 	{disallowUnknown: true},
 	{registry: streamRegistry},
 	{registry: streamRegistry, disallowUnknown: true},
+	{registry: streamTagRegistry},
+	{registry: streamTagRegistry, disallowUnknown: true},
 	{naming: fields.Camel},
 	{naming: fields.Pascal, disallowUnknown: true},
 	{naming: fields.Kebab, registry: streamRegistry},
@@ -348,6 +411,9 @@ var streamOptionSets = []decodeOptions{
 }
 
 var streamSeeds = []string{
+	`(i: (kind: "Circle", radius: 1.5), a: (t: Rect, c: (1, 2)), u: (radius: 2.0), is: [(kind: Dot), (kind: "Poly", sides: 3, name: Some("n")), (kind: "Map", a: 1)], as: [(t: "Label", c: "x"), (t: Dot), (t: Circle, c: (radius: 1.0))], us: [(sides: 1), (1, 2), "s", (), (radius: 1.0, extra: 2), 5], c: (kind: "Circle", radius: 3.0))`,
+	`{"kind": "Dot"}`, `(kind: Circle)`, `(t: Rect, c: (1,2), x: 3)`, `[(t: Rect), (t: Nope, c: 1), (c: 1), 5]`, `[(), (sides: 1, name: None), ("a"), (radius: "x")]`,
+	`(kind: 5)`, `Some((kind: "Dot"))`, `Some((t: Dot))`, `{"t": Label, "c": "q"}`,
 	`(top: 1, x: 2, why: "w", InnerVal: 3, other: "o", extra: [1, 2], more: Foo(1), n: None)`,
 	`FlatMap(a: 1, b: [1], c: [2, 3], rest: {})`,
 	`{"top": 1, "x": 4, "zzz": {"a": 1}, "other": "x"}`,

@@ -146,6 +146,17 @@ err := rustyon.Unmarshal([]byte(`[Circle(radius: 1.5), Rect(2.0, 3.0), Empty]`),
 
 Enums without data, like `enum Difficulty { Easy, Hard }`, map onto Go constants with `rustyon.RegisterUnitEnum`.
 
+Enums that use serde's other representations register with `RegisterEnumWith` and match what ron-rs reads and writes (checked against the ron-rs oracle):
+
+```go
+// #[serde(tag = "type")]            (type: "Circle", radius: 1.0)
+rustyon.RegisterEnumWith[Shape](rustyon.EnumOptions{Tag: "type"}, variants...)
+// #[serde(tag = "t", content = "c")] (t: Circle, c: (radius: 1.0))
+rustyon.RegisterEnumWith[Shape](rustyon.EnumOptions{Tag: "t", Content: "c"}, variants...)
+// #[serde(untagged)]                (radius: 1.0), first variant that fits wins
+rustyon.RegisterEnumWith[Shape](rustyon.EnumOptions{Untagged: true}, variants...)
+```
+
 ### Dynamic values
 
 ```go

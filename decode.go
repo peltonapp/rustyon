@@ -362,8 +362,8 @@ func (d *decoder) decode(v Value, rv reflect.Value) error {
 		rv.Set(val)
 		return nil
 	}
-	if name, ok := d.reg.variantName(t, nil); ok {
-		return d.decodeVariantBody(v, name, rv)
+	if name, info, ok := d.reg.variantOf(t, nil); ok {
+		return d.decodeConcreteVariant(v, name, info, rv)
 	}
 	if t == bigIntType {
 		i, ok := v.(Int)
@@ -477,6 +477,15 @@ func (d *decoder) decodeInterface(v Value, rv reflect.Value) error {
 		return nil
 	}
 	if info := d.reg.enum(t); info != nil {
+		if o, ok := v.(Option); ok {
+			return d.decodeInterface(o.Value, rv)
+		}
+		switch info.rep.rep() {
+		case repUntagged:
+			return d.decodeUntagged(v, info, rv)
+		case repInternal, repAdjacent:
+			return d.decodeTaggedInterface(v, info, rv)
+		}
 		var name string
 		switch v := v.(type) {
 		case Ident:
@@ -487,8 +496,6 @@ func (d *decoder) decodeInterface(v Value, rv reflect.Value) error {
 			name = v.Name
 		case String:
 			name = string(v)
-		case Option:
-			return d.decodeInterface(v.Value, rv)
 		}
 		if name == "" {
 			return d.typeError(v, t, "expected an enum variant")
