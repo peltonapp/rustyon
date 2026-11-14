@@ -127,7 +127,7 @@ footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
         <option value="  ">2 spaces</option>
         <option value="    " selected>4 spaces</option>
         <option value="&#9;">Tab</option>
-        <option value="">Compact</option>
+        <option value="" id="compact-opt">Compact</option>
       </select>
     </label>
   </div>
@@ -240,6 +240,11 @@ footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
     input.value = texts[mode] !== undefined ? texts[mode] : m.sample;
     $("in-title").textContent = m.title;
     $("indent-label").style.display = m.indent ? "" : "none";
+    // The formatter keeps the source layout, so compact output only exists
+    // for the JSON conversions.
+    var compact = $("compact-opt");
+    compact.hidden = compact.disabled = mode === "format";
+    if (mode === "format" && indentSel.value === "") indentSel.value = "    ";
     Array.prototype.forEach.call($("modes").children, function (b) {
       b.setAttribute("aria-pressed", String(b.dataset.mode === mode));
     });
@@ -254,6 +259,7 @@ footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
   input.addEventListener("input", schedule);
   indentSel.addEventListener("change", run);
   input.value = SAMPLE_RON;
+  $("compact-opt").hidden = $("compact-opt").disabled = true;
 
   if (!WebAssembly.instantiateStreaming) {
     WebAssembly.instantiateStreaming = function (resp, imports) {
