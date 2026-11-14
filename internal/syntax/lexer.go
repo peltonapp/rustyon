@@ -484,6 +484,9 @@ func (l *Lexer) scanQuoted(start Position, quote rune, byteStr bool) (string, er
 				return "", err
 			}
 			if isByte {
+				if c < 0 || c > 0xFF {
+					return "", Errorf(p, "byte escape out of range")
+				}
 				sb.WriteByte(byte(c))
 			} else {
 				sb.WriteRune(c)

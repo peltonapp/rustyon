@@ -82,24 +82,18 @@ func ParseInt(t Token) (small int64, bigN *big.Int, err error) {
 	}
 	if t.Suffix == "" || (t.Suffix != "u128" && t.Suffix != "i128") {
 		// Fast path for values that fit into 64 bits.
-		if u, perr := strconv.ParseUint(digits, base, 64); perr == nil {
-			var v int64
-			fits := false
-			switch {
-			case !neg && u <= math.MaxInt64:
-				v, fits = int64(u), true
-			case neg && u <= 1<<63:
-				v, fits = -int64(u), true
-			}
-			if fits {
-				if t.Suffix != "" {
-					r := suffixRanges[t.Suffix]
-					if big.NewInt(v).Cmp(r.min) < 0 || big.NewInt(v).Cmp(r.max) > 0 {
-						return 0, nil, errors.New("integer " + t.Raw + " out of range for " + t.Suffix)
-					}
+		signed := digits
+		if neg {
+			signed = "-" + digits
+		}
+		if v, perr := strconv.ParseInt(signed, base, 64); perr == nil {
+			if t.Suffix != "" {
+				r := suffixRanges[t.Suffix]
+				if big.NewInt(v).Cmp(r.min) < 0 || big.NewInt(v).Cmp(r.max) > 0 {
+					return 0, nil, errors.New("integer " + t.Raw + " out of range for " + t.Suffix)
 				}
-				return v, nil, nil
 			}
+			return v, nil, nil
 		}
 	}
 	n, ok := new(big.Int).SetString(digits, base)
