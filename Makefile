@@ -4,6 +4,8 @@
 GO       ?= go
 FUZZTIME ?= 30s
 PKGS     := ./...
+# The CLI is a separate module (cmd/rustyon) so the library has no dependencies.
+CLI      := cmd/rustyon
 
 .PHONY: all test cover lint fmt vet golangci fuzz bench license build playground check clean
 
@@ -11,11 +13,13 @@ all: check
 
 test:
 	$(GO) test -race -count=1 $(PKGS)
+	cd $(CLI) && $(GO) test -race -count=1 $(PKGS)
 
 cover:
 	$(GO) test -coverprofile=coverage.txt -covermode=atomic $(PKGS)
 	$(GO) tool cover -html=coverage.txt -o coverage.html
 	$(GO) tool cover -func=coverage.txt | tail -1
+	cd $(CLI) && $(GO) test -coverprofile=coverage.txt -covermode=atomic $(PKGS)
 
 fmt:
 	@unformatted="$$(gofmt -l .)"; \
@@ -23,9 +27,11 @@ fmt:
 
 vet:
 	$(GO) vet $(PKGS)
+	cd $(CLI) && $(GO) vet $(PKGS)
 
 golangci:
 	golangci-lint run $(PKGS)
+	cd $(CLI) && golangci-lint run $(PKGS)
 
 lint: fmt vet golangci
 
@@ -46,7 +52,7 @@ license:
 	if [ -n "$$missing" ]; then echo "Missing SPDX header:"; echo "$$missing"; exit 1; fi
 
 build:
-	$(GO) build -trimpath -o bin/rustyon ./cmd/rustyon
+	cd $(CLI) && $(GO) build -trimpath -o ../../bin/rustyon .
 
 # Build the WebAssembly playground into dist/playground. wasm_exec.js is
 # copied from the local Go toolchain so it always matches the compiler.

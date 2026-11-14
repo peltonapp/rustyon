@@ -216,4 +216,10 @@ coverage.txt
 coverage.html
 
 # Locally built CLI binary
+/bin/
 /rustyon
+/cmd/rustyon/rustyon
+
+# The workspace file is committed (see CONTRIBUTING.md)
+!/go.work
+!/go.work.sum
