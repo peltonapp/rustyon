@@ -719,6 +719,12 @@ func (d *decoder) decodeStruct(v Value, rv reflect.Value) error {
 		for _, f := range v.Fields {
 			fi, ok := si.Lookup(f.Name)
 			if !ok {
+				if si.Extra != nil {
+					if err := d.decodeExtra(f.Value, rv, si, f.Name); err != nil {
+						return err
+					}
+					continue
+				}
 				if d.opts.disallowUnknown {
 					return &UnknownFieldError{Field: f.Name, Type: t, Path: d.pathString()}
 				}
@@ -752,6 +758,12 @@ func (d *decoder) decodeStruct(v Value, rv reflect.Value) error {
 			}
 			fi, ok := si.Lookup(name)
 			if !ok {
+				if si.Extra != nil {
+					if err := d.decodeExtra(e.Value, rv, si, name); err != nil {
+						return err
+					}
+					continue
+				}
 				if d.opts.disallowUnknown {
 					return &UnknownFieldError{Field: name, Type: t, Path: d.pathString()}
 				}
@@ -768,6 +780,24 @@ func (d *decoder) decodeStruct(v Value, rv reflect.Value) error {
 		}
 	}
 	return d.typeError(v, t, "")
+}
+
+// decodeExtra stores the field called name in the flattened catch-all map.
+func (d *decoder) decodeExtra(v Value, rv reflect.Value, si *fields.Info, name string) error {
+	m := fields.ByIndex(rv, si.Extra.Index, true)
+	t := m.Type()
+	if m.IsNil() {
+		m.Set(reflect.MakeMap(t))
+	}
+	ev := reflect.New(t.Elem()).Elem()
+	d.pushField(name)
+	err := d.decode(v, ev)
+	d.pop()
+	if err != nil {
+		return err
+	}
+	m.SetMapIndex(reflect.ValueOf(name).Convert(t.Key()), ev)
+	return nil
 }
 
 func (d *decoder) decodeField(v Value, rv reflect.Value, f *fields.Field) error {

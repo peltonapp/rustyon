@@ -248,6 +248,28 @@ func ExampleEncoder() {
 	// Output: #![enable(implicit_some)]Window(title:"main",width:640)
 }
 
+func ExampleMarshal_flatten() {
+	type Common struct {
+		ID   int
+		Name string
+	}
+	type Item struct {
+		Common `ron:",flatten"`
+		Extra  map[string]any `ron:",flatten"` // collects unknown fields
+	}
+	var it Item
+	err := rustyon.Unmarshal([]byte(`(id: 7, name: "sword", damage: 12, tags: ["a"])`), &it)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(it.ID, it.Name, it.Extra["damage"])
+	out, _ := rustyon.Marshal(it)
+	fmt.Println(string(out))
+	// Output:
+	// 7 sword 12
+	// (id:7,name:"sword",damage:12,tags:["a"])
+}
+
 func ExampleRaw() {
 	type Envelope struct {
 		Kind    string

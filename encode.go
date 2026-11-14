@@ -67,7 +67,13 @@ func (o *encodeOptions) extensions() Extensions {
 //     options omitempty and omitzero skip empty or zero fields, and "-"
 //     skips a field. A blank field of type struct{} named _ with the tag
 //     `ron:"Name,tuple"` sets the struct's RON name and, with the tuple
-//     option, encodes the struct as a tuple struct (a, b).
+//     option, encodes the struct as a tuple struct (a, b). The option
+//     rename_all=camelCase on that field renames the struct's fields, see
+//     [NamingStrategy]. Embedded structs, and fields of struct type with the
+//     option flatten, have their fields written inline in the parent, as
+//     serde's flatten does. A field of type map[string]T with the option
+//     flatten collects all fields that no other field matches when decoding,
+//     and is written as fields after the regular ones.
 //   - Pointers map to Option: nil is None and anything else is Some(v).
 //   - Nil interfaces map to None.
 //   - Types registered as enum variants (see [Registry]) map to Name,
@@ -227,7 +233,7 @@ func (e *encoder) encodeVariant(rv reflect.Value, name string) (Value, error) {
 	}
 	if rv.Kind() == reflect.Struct && !hasCustomMarshaler(rv.Type()) {
 		si := fields.ForNaming(rv.Type(), e.opts.naming)
-		if len(si.Fields) == 0 {
+		if len(si.Fields) == 0 && si.Extra == nil {
 			return Ident(name), nil
 		}
 		if si.Tuple {
@@ -482,7 +488,7 @@ func (e *encoder) encodeStruct(rv reflect.Value) (Value, error) {
 		}
 		return Tuple{Name: name, Values: vals}, nil
 	}
-	if len(si.Fields) == 0 {
+	if len(si.Fields) == 0 && si.Extra == nil {
 		if name != "" {
 			return Ident(name), nil
 		}
@@ -510,6 +516,30 @@ func (e *encoder) structFields(rv reflect.Value, si *fields.Info) ([]Field, erro
 			return nil, err
 		}
 		out = append(out, Field{Name: f.Name, Value: v})
+	}
+	if si.Extra != nil {
+		return e.extraFields(rv, si, out)
+	}
+	return out, nil
+}
+
+// extraFields appends the entries of the flattened catch-all map as fields.
+func (e *encoder) extraFields(rv reflect.Value, si *fields.Info, out []Field) ([]Field, error) {
+	m := fields.ByIndex(rv, si.Extra.Index, false)
+	if !m.IsValid() || m.Len() == 0 {
+		return out, nil
+	}
+	keys := make([]string, 0, m.Len())
+	for iter := m.MapRange(); iter.Next(); {
+		keys = append(keys, iter.Key().String())
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		v, err := e.encode(m.MapIndex(reflect.ValueOf(k).Convert(m.Type().Key())))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Field{Name: k, Value: v})
 	}
 	return out, nil
 }

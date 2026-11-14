@@ -176,6 +176,9 @@ var streamTargets = []struct {
 	{"opts", func() any { return new([]*[]*string) }},
 	{"embedded", func() any { return new(SEmbedded) }},
 	{"unit", func() any { return new(struct{ A struct{} }) }},
+	{"flat", func() any { return new(sFlat) }},
+	{"flats", func() any { return new([]sFlat) }},
+	{"flatmap", func() any { return new(sFlatMap) }},
 	{"rawval", func() any { return new(Raw) }},
 	{"rawfields", func() any { return new(struct{ A, B Raw }) }},
 	{"rawcont", func() any {
@@ -317,6 +320,21 @@ type sNamedEm struct {
 	EmVal int
 }
 
+type sFlat struct {
+	Top   int
+	In    sInner         `ron:",flatten"`
+	PIn   *sNamedIn      `ron:",flatten"`
+	Rest  map[string]any `ron:",flatten"`
+	Other string
+}
+
+type sFlatMap struct {
+	_    struct{} `ron:"FlatMap"`
+	A    int
+	Rest map[sColor]string `ron:",flatten"` // not a string key: a normal field
+	R2   map[string][]int  `ron:",flatten"`
+}
+
 var streamOptionSets = []decodeOptions{
 	{},
 	{disallowUnknown: true},
@@ -330,6 +348,10 @@ var streamOptionSets = []decodeOptions{
 }
 
 var streamSeeds = []string{
+	`(top: 1, x: 2, why: "w", InnerVal: 3, other: "o", extra: [1, 2], more: Foo(1), n: None)`,
+	`FlatMap(a: 1, b: [1], c: [2, 3], rest: {})`,
+	`{"top": 1, "x": 4, "zzz": {"a": 1}, "other": "x"}`,
+	`[(top: 1, k: 'c'), (x: 1, k: 2.5), (inner_val: 1), ()]`,
 	`(a: Foo(/* c */ 1, 2), b: [1, Some(2)], l: [x, (y: 1), 1..2], m: {"k": Some(None)}, p: ( ))`,
 	`#![enable(implicit_some)] (a: 5, b: Some 6, l: [None], p: 7)`,
 	`Named(firstOne: 1, second: [(InnerVal: 2), (inner_val: 3)], Tag_X: "t", EM_VAL: 4)`,

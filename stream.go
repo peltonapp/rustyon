@@ -50,6 +50,7 @@ type typePlan struct {
 type structPlan struct {
 	info  *fields.Info
 	plans []atomic.Pointer[typePlan]
+	extra atomic.Pointer[typePlan] // element plan of the flattened catch-all map
 }
 
 var planCache sync.Map // reflect.Type to *typePlan
@@ -111,6 +112,15 @@ func (pl *typePlan) structPlan(naming fields.Naming) *structPlan {
 		actual = sp
 	}
 	return actual
+}
+
+func (sp *structPlan) extraPlan() *typePlan {
+	if pl := sp.extra.Load(); pl != nil {
+		return pl
+	}
+	pl := planOf(sp.info.Extra.Type.Elem())
+	sp.extra.Store(pl)
+	return pl
 }
 
 func (sp *structPlan) fieldPlan(i int) *typePlan {
@@ -1121,6 +1131,22 @@ func (s *streamer) mapKeyName() (string, error) {
 	return kh.s, s.colon()
 }
 
+// storeExtra decodes the value of an unmatched field into the flattened
+// catch-all map.
+func (s *streamer) storeExtra(rv reflect.Value, sp *structPlan, name string) error {
+	m := fieldValue(rv, sp.info.Extra)
+	t := m.Type()
+	if m.IsNil() {
+		m.Set(reflect.MakeMap(t))
+	}
+	ev := reflect.New(t.Elem()).Elem()
+	if err := s.guardedValue(ev, sp.extraPlan()); err != nil {
+		return err
+	}
+	m.SetMapIndex(reflect.ValueOf(strings.Clone(name)).Convert(t.Key()), ev)
+	return nil
+}
+
 // structField decodes the value of the field called name, or skips it.
 func (s *streamer) structField(rv reflect.Value, sp *structPlan, name string, nextField *int) error {
 	si := sp.info
@@ -1131,6 +1157,9 @@ func (s *streamer) structField(rv reflect.Value, sp *structPlan, name string, ne
 		idx = i
 	}
 	if idx < 0 {
+		if si.Extra != nil {
+			return s.storeExtra(rv, sp, name)
+		}
 		if s.d.opts.disallowUnknown {
 			return errStream
 		}

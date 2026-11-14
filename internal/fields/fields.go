@@ -18,6 +18,10 @@ type Info struct {
 	Name   string // RON struct name: from a `_` field tag or the Go type name
 	Tuple  bool   // encode as a tuple struct
 	Fields []Field
+	// Extra is a map[string]T field marked `ron:",flatten"`. It collects the
+	// fields of the input that no entry of Fields matches, and its entries
+	// are written as fields after the regular ones.
+	Extra  *Field
 	byName map[string]int
 	byFold map[string]int
 }
@@ -124,6 +128,7 @@ func build(t reflect.Type, def Naming) *Info {
 		tagged bool
 	}
 	var cands []candidate
+	extraDepth := 0
 	var walk func(t reflect.Type, index []int, depth int, seen map[reflect.Type]bool, naming Naming)
 	walk = func(t reflect.Type, index []int, depth int, seen map[reflect.Type]bool, naming Naming) {
 		if seen[t] {
@@ -148,16 +153,25 @@ func build(t reflect.Type, def Naming) *Info {
 			}
 			name, opts := parseTag(tag)
 			idx := append(slices.Clone(index), i)
-			if f.Anonymous && name == "" {
+			flatten := name == "" && slices.Contains(opts, "flatten")
+			if name == "" && (f.Anonymous || flatten) {
 				ft := f.Type
 				if ft.Kind() == reflect.Pointer {
 					ft = ft.Elem()
 				}
 				if ft.Kind() == reflect.Struct {
-					if !f.IsExported() && f.Type.Kind() == reflect.Pointer {
+					if !f.IsExported() && (f.Type.Kind() == reflect.Pointer || !f.Anonymous) {
 						continue
 					}
 					walk(ft, idx, depth+1, seen, naming)
+					continue
+				}
+				if flatten && f.IsExported() && f.Type.Kind() == reflect.Map && f.Type.Key().Kind() == reflect.String {
+					// A catch-all for the fields that no other field matches.
+					if si.Extra == nil || depth < extraDepth {
+						si.Extra = &Field{Index: idx, Type: f.Type}
+						extraDepth = depth
+					}
 					continue
 				}
 			}

@@ -60,6 +60,37 @@ type Embed struct {
 
 type Plain struct{ InPlain int }
 
+type flatInner struct {
+	Deep  int
+	Extra map[string]string `ron:",flatten"`
+}
+
+type flatOuter struct {
+	Own    int
+	Inner  flatInner       `ron:",flatten"`
+	Opt    *flatInner      `ron:",flatten"`
+	Tagged flatInner       `ron:"tagged,flatten"` // a name wins over flatten
+	Bad    map[int]string  `ron:",flatten"`
+	Any    map[string]bool `ron:",flatten"`
+}
+
+func TestFlatten(t *testing.T) {
+	si := For(reflect.TypeFor[flatOuter]())
+	var names []string
+	for _, f := range si.Fields {
+		names = append(names, f.Name)
+	}
+	// Deep is promoted twice at the same depth, which hides it.
+	want := []string{"own", "tagged", "bad"}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("fields = %v, want %v", names, want)
+	}
+	// The catch-all at the shallowest depth wins.
+	if si.Extra == nil || !reflect.DeepEqual(si.Extra.Index, []int{5}) {
+		t.Errorf("Extra = %+v", si.Extra)
+	}
+}
+
 func TestForNaming(t *testing.T) {
 	names := func(si *Info) []string {
 		var out []string

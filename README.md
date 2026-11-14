@@ -83,6 +83,17 @@ type Window struct {
 }
 ```
 
+### Flatten
+
+Like serde's `flatten`: embedded structs and struct fields tagged `ron:",flatten"` are written inline, and a `map[string]T` field tagged `ron:",flatten"` collects every field no other field matches.
+
+```go
+type Item struct {
+    Common `ron:",flatten"`            // id and name appear directly in Item
+    Extra  map[string]any `ron:",flatten"` // all other fields
+}
+```
+
 ### Pretty printing options
 
 `MarshalIndent` covers the common case. `MarshalWithConfig` (or `Encoder.SetPrettyConfig`) mirrors ron-rs's `PrettyConfig`: compact arrays, structs and maps, separate tuple members, a depth limit, `\u{..}` escapes for non-ASCII text, custom line break, indent, prefix and separator after the colon, and `// [0]` index comments for lists. The output always parses back to the same value.
