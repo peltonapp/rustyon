@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -346,6 +347,51 @@ func FuzzStream(f *testing.F) {
 		prefix := streamExtensionPrefixes[int(exts)%len(streamExtensionPrefixes)]
 		checkStream(t, []byte(prefix+string(data)), streamOptionSets[int(opt)%len(streamOptionSets)])
 	})
+}
+
+// TestStreamConcurrent decodes into types whose plans are built lazily from
+// many goroutines, for the race detector.
+func TestStreamConcurrent(t *testing.T) {
+	data := []byte(`(b: true, l: [1, 2], in: (x: 1), nested: [{"a": [(x: 2)]}])`)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var v struct {
+				B      bool
+				L      []int
+				In     sInner
+				Nested []map[string][]sInner
+			}
+			if err := Unmarshal(data, &v); err != nil || !v.B || len(v.L) != 2 || v.Nested[0]["a"][0].X != 2 {
+				t.Error(v, err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// TestStreamAliasing checks that decoded strings do not keep the input alive
+// by pointing into it and that decoding into a populated slice starts fresh.
+func TestStreamAliasing(t *testing.T) {
+	data := []byte(`["abc", "d\ne"]`)
+	var s []string
+	if err := Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	copy(data, strings.Repeat("x", len(data)))
+	if s[0] != "abc" || s[1] != "d\ne" {
+		t.Fatalf("strings changed with the input: %q", s)
+	}
+	type item struct{ A, B int }
+	old := []item{{1, 2}, {3, 4}}
+	if err := Unmarshal([]byte(`[(a: 9)]`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if len(old) != 1 || old[0] != (item{9, 0}) {
+		t.Fatalf("got %v", old)
+	}
 }
 
 // TestStreamDecoderSequence checks that a Decoder over several values keeps
