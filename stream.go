@@ -161,7 +161,11 @@ func (s *streamer) streamInto(v any) error {
 		return errStream
 	}
 	elem := rv.Elem()
-	return s.value(elem, planOf(elem.Type()))
+	err := s.value(elem, planOf(elem.Type()))
+	if err != nil && s.d.hookErr != nil {
+		return &hookFailure{s.d.hookErr}
+	}
+	return err
 }
 
 // unmarshal is the streaming implementation of Unmarshal.
@@ -1130,7 +1134,8 @@ func unmarshalTree(data []byte, v any, opts *decodeOptions) error {
 func (dec *Decoder) decodeNext(v any) error {
 	p := dec.p
 	cur, nv, limit := p.cur, p.newtypeVariant, p.limit
-	if err := dec.decodeStream(v); err == nil {
+	serr := dec.decodeStream(v)
+	if serr == nil {
 		return nil
 	}
 	p.cur, p.newtypeVariant, p.limit = cur, nv, limit
@@ -1139,5 +1144,46 @@ func (dec *Decoder) decodeNext(v any) error {
 		dec.err = p.wrap(err)
 		return dec.err
 	}
-	return decodeInto(val, v, &dec.opts)
+	return decodeScratch(val, v, &dec.opts, serr)
+}
+
+// hookFailure wraps an error returned by an Unmarshaler or
+// encoding.TextUnmarshaler during streaming.
+type hookFailure struct{ err error }
+
+func (h *hookFailure) Error() string { return h.err.Error() }
+
+// decodeScratch is the error path after a failed streaming decode, once the
+// input is known to be syntactically valid. The failure is either an error
+// returned by a hook, which is passed on, or a type or unknown field error,
+// which is computed by tree decoding into a fresh value of the target type
+// with hooks disabled. Hooks therefore run at most once on v.
+func decodeScratch(val Value, v any, opts *decodeOptions, serr error) error {
+	var hf *hookFailure
+	if errors.As(serr, &hf) {
+		return hf.err
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return decodeInto(val, v, opts)
+	}
+	o := *opts
+	o.noHooks = true
+	if err := decodeInto(val, reflect.New(rv.Type().Elem()).Interface(), &o); err != nil {
+		return err
+	}
+	// The streaming decoder failed on something the tree decoder accepts.
+	return decodeInto(val, v, opts)
+}
+
+// unmarshalFallback computes the precise error of a failed streaming
+// Unmarshal. Syntax errors come from parsing alone.
+func unmarshalFallback(data []byte, v any, opts *decodeOptions, serr error) error {
+	doc, err := ParseDocument(data)
+	if err != nil {
+		return err
+	}
+	o := *opts
+	o.exts |= doc.Extensions
+	return decodeScratch(doc.Value, v, &o, serr)
 }

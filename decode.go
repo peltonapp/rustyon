@@ -52,14 +52,16 @@ var (
 // tree, except for the parts of the input that go into an empty interface, a
 // Value, an enum registered with the registry or a type with an
 // [Unmarshaler] or [encoding.TextUnmarshaler] method. If decoding fails, v
-// may be partially modified.
+// may be partially modified. Each such method is called at most once per
+// value, including when a later part of the input is invalid.
 func Unmarshal(data []byte, v any) error {
-	if err := unmarshalStream(data, v, &decodeOptions{}); err == nil {
+	err := unmarshalStream(data, v, &decodeOptions{})
+	if err == nil {
 		return nil
 	}
-	// The streaming decoder only reports that it failed. The tree decoder
-	// finds the precise error.
-	return unmarshalTree(data, v, &decodeOptions{})
+	// The streaming decoder only reports that it failed. Parsing finds
+	// syntax errors and tree decoding into a scratch value finds the rest.
+	return unmarshalFallback(data, v, &decodeOptions{}, err)
 }
 
 // FromValue stores a parsed [Value] in the Go value pointed to by target,
@@ -72,6 +74,7 @@ type decodeOptions struct {
 	disallowUnknown bool
 	registry        *Registry
 	exts            Extensions // extensions enabled by the document
+	noHooks         bool       // skip Unmarshaler and TextUnmarshaler calls
 }
 
 func decodeInto(val Value, v any, opts *decodeOptions) error {
@@ -164,9 +167,10 @@ func (dec *Decoder) Decode(v any) error {
 }
 
 type decoder struct {
-	opts *decodeOptions
-	reg  *registryState
-	path []pathElem
+	opts    *decodeOptions
+	reg     *registryState
+	path    []pathElem
+	hookErr error // first error returned by an Unmarshaler or TextUnmarshaler
 }
 
 // pathElem is one step of the path to the value being decoded. It is
@@ -209,7 +213,15 @@ func (d *decoder) pathString() string {
 	return sb.String()
 }
 
-func (d *decoder) push(e pathElem)       { d.path = append(d.path, e) }
+// hook records an error returned by a user supplied unmarshal method.
+func (d *decoder) hook(err error) error {
+	if err != nil && d.hookErr == nil {
+		d.hookErr = err
+	}
+	return err
+}
+
+func (d *decoder) push(e pathElem)      { d.path = append(d.path, e) }
 func (d *decoder) pushField(name string) { d.push(pathElem{kind: pathField, name: name}) }
 func (d *decoder) pushIndex(i int)       { d.push(pathElem{kind: pathIndex, index: i}) }
 func (d *decoder) pushKey(k Value)       { d.push(pathElem{kind: pathKey, key: k}) }
@@ -301,11 +313,14 @@ func (d *decoder) decode(v Value, rv reflect.Value) error {
 	if rv.CanAddr() && (f.unmarshaler || f.textUnmarshaler) {
 		pv := rv.Addr()
 		if f.unmarshaler {
+			if d.opts.noHooks {
+				return nil
+			}
 			b, err := printDocument(v, &encodeOptions{})
 			if err != nil {
 				return err
 			}
-			return pv.Interface().(Unmarshaler).UnmarshalRON(b)
+			return d.hook(pv.Interface().(Unmarshaler).UnmarshalRON(b))
 		}
 		if t != bigIntType {
 			if d.reg.unitEnum(t) == nil {
@@ -318,7 +333,10 @@ func (d *decoder) decode(v Value, rv reflect.Value) error {
 				default:
 					return d.typeError(v, t, "expected a string")
 				}
-				return pv.Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(text))
+				if d.opts.noHooks {
+					return nil
+				}
+				return d.hook(pv.Interface().(encoding.TextUnmarshaler).UnmarshalText([]byte(text)))
 			}
 		}
 	}

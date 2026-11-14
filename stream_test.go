@@ -349,6 +349,77 @@ func FuzzStream(f *testing.F) {
 	})
 }
 
+var hookCalls int
+
+type countingHook struct{ N int }
+
+func (c *countingHook) UnmarshalRON([]byte) error {
+	hookCalls++
+	c.N = hookCalls
+	return nil
+}
+
+type countingText struct{ S string }
+
+func (c *countingText) UnmarshalText(b []byte) error {
+	hookCalls++
+	c.S = string(b)
+	return nil
+}
+
+type failingHook struct{}
+
+func (failingHook) UnmarshalRON([]byte) error { return fmt.Errorf("hook failed") }
+
+// TestStreamHooksRunOnce checks that a failing decode runs each hook at most
+// once, whether the failure is a later syntax error, a later type error or
+// an error of the hook itself.
+func TestStreamHooksRunOnce(t *testing.T) {
+	type doc struct {
+		H countingHook
+		T countingText
+		N int
+	}
+	cases := []struct {
+		name, in string
+		want     any
+	}{
+		{"syntax", `(h: 1, t: "x", n: 2,, )`, new(SyntaxError)},
+		{"type", `(h: 1, t: "x", n: "no")`, new(UnmarshalTypeError)},
+	}
+	for _, c := range cases {
+		hookCalls = 0
+		var d doc
+		err := Unmarshal([]byte(c.in), &d)
+		if err == nil {
+			t.Fatalf("%s: want error", c.name)
+		}
+		switch want := c.want.(type) {
+		case *SyntaxError:
+			if !errors.As(err, &want) {
+				t.Fatalf("%s: want syntax error, got %v", c.name, err)
+			}
+		case *UnmarshalTypeError:
+			if !errors.As(err, &want) {
+				t.Fatalf("%s: want type error, got %v", c.name, err)
+			}
+		}
+		// One call each for the RON hook and the text hook.
+		if hookCalls != 2 {
+			t.Fatalf("%s: hooks ran %d times, want 2", c.name, hookCalls)
+		}
+	}
+
+	var f struct {
+		A failingHook
+		B int
+	}
+	err := Unmarshal([]byte(`(a: 1, b: "no")`), &f)
+	if err == nil || err.Error() != "hook failed" {
+		t.Fatalf("want the hook error, got %v", err)
+	}
+}
+
 // TestStreamConcurrent decodes into types whose plans are built lazily from
 // many goroutines, for the race detector.
 func TestStreamConcurrent(t *testing.T) {
