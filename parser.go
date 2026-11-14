@@ -4,16 +4,15 @@
 package rustyon
 
 import (
+	"errors"
 	"math"
-	"math/big"
-	"strconv"
-	"strings"
-	"unicode/utf8"
+
+	"github.com/peltonapp/rustyon-go/internal/syntax"
 )
 
 // maxDepth limits nesting to protect against stack exhaustion on hostile
 // input.
-const maxDepth = 1000
+const maxDepth = syntax.MaxDepth
 
 // Extensions is a set of RON extensions enabled through an
 // #![enable(...)] attribute at the start of a document.
@@ -33,34 +32,15 @@ const (
 	ExplicitStructNames
 )
 
-var extensionNames = []struct {
-	ext  Extensions
-	name string
-}{
-	{ImplicitSome, "implicit_some"},
-	{UnwrapNewtypes, "unwrap_newtypes"},
-	{UnwrapVariantNewtypes, "unwrap_variant_newtypes"},
-	{ExplicitStructNames, "explicit_struct_names"},
-}
-
 // Names returns the RON names of the enabled extensions.
 func (e Extensions) Names() []string {
 	var names []string
-	for _, x := range extensionNames {
-		if e&x.ext != 0 {
-			names = append(names, x.name)
+	for i, name := range syntax.ExtensionNames {
+		if e&(1<<i) != 0 {
+			names = append(names, name)
 		}
 	}
 	return names
-}
-
-func extensionByName(name string) (Extensions, bool) {
-	for _, x := range extensionNames {
-		if x.name == name {
-			return x.ext, true
-		}
-	}
-	return 0, false
 }
 
 // Document is a parsed RON document: an optional set of extensions and a
@@ -90,7 +70,7 @@ func ParseDocument(data []byte) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.tok.kind != tokEOF {
+	if p.tok.Kind != syntax.EOF {
 		return nil, p.unexpected("end of input")
 	}
 	return doc, nil
@@ -102,38 +82,40 @@ func Valid(data []byte) bool {
 	return err == nil
 }
 
+// syntaxError converts errors from the syntax package into *SyntaxError.
+func syntaxError(err error) error {
+	var se *syntax.Error
+	if errors.As(err, &se) {
+		return &SyntaxError{Msg: se.Msg, Pos: Position(se.Pos)}
+	}
+	return err
+}
+
 type parser struct {
-	lex   *lexer
-	tok   token   // current token, never a comment
-	ahead []token // lookahead buffer, never comments
+	lex   *syntax.Lexer
+	tok   syntax.Token   // current token, never a comment
+	ahead []syntax.Token // lookahead buffer, never comments
 	depth int
 }
 
 func newParser(data []byte) (*parser, error) {
-	if !utf8.Valid(data) {
-		l := newLexer(data)
-		for l.off < len(l.src) {
-			if r, size := utf8.DecodeRuneInString(l.src[l.off:]); r == utf8.RuneError && size == 1 {
-				break
-			}
-			l.advance()
-		}
-		return nil, &SyntaxError{Msg: "invalid UTF-8 encoding", Pos: l.pos()}
+	if err := syntax.CheckUTF8(data); err != nil {
+		return nil, syntaxError(err)
 	}
-	p := &parser{lex: newLexer(data)}
+	p := &parser{lex: syntax.NewLexer(data)}
 	if err := p.next(); err != nil {
 		return nil, err
 	}
 	return p, nil
 }
 
-func (p *parser) lexNonComment() (token, error) {
+func (p *parser) lexNonComment() (syntax.Token, error) {
 	for {
-		t, err := p.lex.next()
+		t, err := p.lex.Next()
 		if err != nil {
-			return t, err
+			return t, syntaxError(err)
 		}
-		if t.kind != tokLineComment && t.kind != tokBlockComment {
+		if !t.Kind.IsComment() {
 			return t, nil
 		}
 	}
@@ -154,7 +136,7 @@ func (p *parser) next() error {
 }
 
 // peek returns the token after the current one.
-func (p *parser) peek() (token, error) {
+func (p *parser) peek() (syntax.Token, error) {
 	if len(p.ahead) == 0 {
 		t, err := p.lexNonComment()
 		if err != nil {
@@ -166,31 +148,15 @@ func (p *parser) peek() (token, error) {
 }
 
 func (p *parser) errorf(format string, args ...any) error {
-	return p.lex.errorf(p.tok.pos, format, args...)
-}
-
-func describe(t token) string {
-	switch t.kind {
-	case tokEOF:
-		return "end of input"
-	case tokIdent:
-		return "identifier " + t.raw
-	case tokInt, tokFloat, tokString, tokByteString, tokChar, tokByte:
-		raw := t.raw
-		if len(raw) > 32 {
-			raw = raw[:29] + "..."
-		}
-		return t.kind.String() + " " + raw
-	}
-	return t.kind.String()
+	return syntaxError(syntax.Errorf(p.tok.Pos, format, args...))
 }
 
 func (p *parser) unexpected(want string) error {
-	return p.errorf("expected %s, found %s", want, describe(p.tok))
+	return p.errorf("expected %s, found %s", want, p.tok.Describe())
 }
 
-func (p *parser) expect(k tokenKind) error {
-	if p.tok.kind != k {
+func (p *parser) expect(k syntax.Kind) error {
+	if p.tok.Kind != k {
 		return p.unexpected(k.String())
 	}
 	return p.next()
@@ -198,7 +164,7 @@ func (p *parser) expect(k tokenKind) error {
 
 func (p *parser) parseDocument() (*Document, error) {
 	doc := &Document{}
-	for p.tok.kind == tokHash {
+	for p.tok.Kind == syntax.Hash {
 		ext, err := p.parseAttribute()
 		if err != nil {
 			return nil, err
@@ -215,48 +181,44 @@ func (p *parser) parseDocument() (*Document, error) {
 
 // parseAttribute parses #![enable(a, b, ...)].
 func (p *parser) parseAttribute() (Extensions, error) {
-	if err := p.expect(tokHash); err != nil {
-		return 0, err
+	for _, k := range []syntax.Kind{syntax.Hash, syntax.Bang, syntax.LBracket} {
+		if err := p.expect(k); err != nil {
+			return 0, err
+		}
 	}
-	if err := p.expect(tokBang); err != nil {
-		return 0, err
-	}
-	if err := p.expect(tokLBracket); err != nil {
-		return 0, err
-	}
-	if p.tok.kind != tokIdent || p.tok.str != "enable" {
+	if p.tok.Kind != syntax.Ident || p.tok.Str != "enable" {
 		return 0, p.unexpected("enable")
 	}
 	if err := p.next(); err != nil {
 		return 0, err
 	}
-	if err := p.expect(tokLParen); err != nil {
+	if err := p.expect(syntax.LParen); err != nil {
 		return 0, err
 	}
 	var exts Extensions
-	for p.tok.kind != tokRParen {
-		if p.tok.kind != tokIdent {
+	for p.tok.Kind != syntax.RParen {
+		if p.tok.Kind != syntax.Ident {
 			return 0, p.unexpected("extension name")
 		}
-		ext, ok := extensionByName(p.tok.str)
+		bit, ok := syntax.ExtensionBit(p.tok.Str)
 		if !ok {
-			return 0, p.errorf("unknown extension %q", p.tok.str)
+			return 0, p.errorf("unknown extension %q", p.tok.Str)
 		}
-		exts |= ext
+		exts |= 1 << bit
 		if err := p.next(); err != nil {
 			return 0, err
 		}
-		if p.tok.kind != tokComma {
+		if p.tok.Kind != syntax.Comma {
 			break
 		}
 		if err := p.next(); err != nil {
 			return 0, err
 		}
 	}
-	if err := p.expect(tokRParen); err != nil {
+	if err := p.expect(syntax.RParen); err != nil {
 		return 0, err
 	}
-	if err := p.expect(tokRBracket); err != nil {
+	if err := p.expect(syntax.RBracket); err != nil {
 		return 0, err
 	}
 	return exts, nil
@@ -270,34 +232,34 @@ func (p *parser) parseValue() (Value, error) {
 	}
 
 	t := p.tok
-	switch t.kind {
-	case tokLParen:
+	switch t.Kind {
+	case syntax.LParen:
 		return p.parseParens("")
-	case tokLBracket:
+	case syntax.LBracket:
 		return p.parseList()
-	case tokLBrace:
+	case syntax.LBrace:
 		return p.parseMap()
-	case tokInt:
-		v, err := parseIntToken(t)
+	case syntax.Int:
+		small, b, err := syntax.ParseInt(t)
 		if err != nil {
 			return nil, p.errorf("%s", err.Error())
 		}
-		return v, p.next()
-	case tokFloat:
-		v, err := parseFloatToken(t)
+		return Int{small: small, b: b}, p.next()
+	case syntax.Float:
+		f, err := syntax.ParseFloat(t)
 		if err != nil {
 			return nil, p.errorf("%s", err.Error())
 		}
-		return v, p.next()
-	case tokString:
-		return String(t.str), p.next()
-	case tokByteString:
-		return Bytes(t.str), p.next()
-	case tokChar:
-		return Char(t.r), p.next()
-	case tokByte:
-		return NewInt(int64(t.r)), p.next()
-	case tokIdent:
+		return Float(f), p.next()
+	case syntax.String:
+		return String(t.Str), p.next()
+	case syntax.ByteString:
+		return Bytes(t.Str), p.next()
+	case syntax.Char:
+		return Char(t.Rune), p.next()
+	case syntax.Byte:
+		return NewInt(int64(t.Rune)), p.next()
+	case syntax.Ident:
 		return p.parseIdentValue()
 	}
 	return nil, p.unexpected("value")
@@ -305,8 +267,8 @@ func (p *parser) parseValue() (Value, error) {
 
 func (p *parser) parseIdentValue() (Value, error) {
 	t := p.tok
-	if !t.rawID {
-		switch t.str {
+	if !t.RawIdent {
+		switch t.Str {
 		case "true":
 			return Bool(true), p.next()
 		case "false":
@@ -321,19 +283,19 @@ func (p *parser) parseIdentValue() (Value, error) {
 			if err := p.next(); err != nil {
 				return nil, err
 			}
-			if err := p.expect(tokLParen); err != nil {
+			if err := p.expect(syntax.LParen); err != nil {
 				return nil, err
 			}
 			v, err := p.parseValue()
 			if err != nil {
 				return nil, err
 			}
-			if p.tok.kind == tokComma {
+			if p.tok.Kind == syntax.Comma {
 				if err := p.next(); err != nil {
 					return nil, err
 				}
 			}
-			if err := p.expect(tokRParen); err != nil {
+			if err := p.expect(syntax.RParen); err != nil {
 				return nil, err
 			}
 			return Some(v), nil
@@ -342,10 +304,10 @@ func (p *parser) parseIdentValue() (Value, error) {
 	if err := p.next(); err != nil {
 		return nil, err
 	}
-	if p.tok.kind == tokLParen {
-		return p.parseParens(t.str)
+	if p.tok.Kind == syntax.LParen {
+		return p.parseParens(t.Str)
 	}
-	return Ident(t.str), nil
+	return Ident(t.Str), nil
 }
 
 // parseParens parses (...) which is a unit, tuple or struct depending on the
@@ -354,7 +316,7 @@ func (p *parser) parseParens(name string) (Value, error) {
 	if err := p.next(); err != nil {
 		return nil, err
 	}
-	if p.tok.kind == tokRParen {
+	if p.tok.Kind == syntax.RParen {
 		if err := p.next(); err != nil {
 			return nil, err
 		}
@@ -364,24 +326,24 @@ func (p *parser) parseParens(name string) (Value, error) {
 		return Tuple{Name: name}, nil
 	}
 	isStruct := false
-	if p.tok.kind == tokIdent {
+	if p.tok.Kind == syntax.Ident {
 		nt, err := p.peek()
 		if err != nil {
 			return nil, err
 		}
-		isStruct = nt.kind == tokColon
+		isStruct = nt.Kind == syntax.Colon
 	}
 	if isStruct {
 		s := Struct{Name: name}
-		for p.tok.kind != tokRParen {
-			if p.tok.kind != tokIdent {
+		for p.tok.Kind != syntax.RParen {
+			if p.tok.Kind != syntax.Ident {
 				return nil, p.unexpected("field name")
 			}
-			fname := p.tok.str
+			fname := p.tok.Str
 			if err := p.next(); err != nil {
 				return nil, err
 			}
-			if err := p.expect(tokColon); err != nil {
+			if err := p.expect(syntax.Colon); err != nil {
 				return nil, err
 			}
 			v, err := p.parseValue()
@@ -389,30 +351,30 @@ func (p *parser) parseParens(name string) (Value, error) {
 				return nil, err
 			}
 			s.Fields = append(s.Fields, Field{Name: fname, Value: v})
-			if p.tok.kind != tokComma {
+			if p.tok.Kind != syntax.Comma {
 				break
 			}
 			if err := p.next(); err != nil {
 				return nil, err
 			}
 		}
-		return s, p.expect(tokRParen)
+		return s, p.expect(syntax.RParen)
 	}
 	tup := Tuple{Name: name}
-	for p.tok.kind != tokRParen {
+	for p.tok.Kind != syntax.RParen {
 		v, err := p.parseValue()
 		if err != nil {
 			return nil, err
 		}
 		tup.Values = append(tup.Values, v)
-		if p.tok.kind != tokComma {
+		if p.tok.Kind != syntax.Comma {
 			break
 		}
 		if err := p.next(); err != nil {
 			return nil, err
 		}
 	}
-	return tup, p.expect(tokRParen)
+	return tup, p.expect(syntax.RParen)
 }
 
 func (p *parser) parseList() (Value, error) {
@@ -420,20 +382,20 @@ func (p *parser) parseList() (Value, error) {
 		return nil, err
 	}
 	list := List{}
-	for p.tok.kind != tokRBracket {
+	for p.tok.Kind != syntax.RBracket {
 		v, err := p.parseValue()
 		if err != nil {
 			return nil, err
 		}
 		list = append(list, v)
-		if p.tok.kind != tokComma {
+		if p.tok.Kind != syntax.Comma {
 			break
 		}
 		if err := p.next(); err != nil {
 			return nil, err
 		}
 	}
-	return list, p.expect(tokRBracket)
+	return list, p.expect(syntax.RBracket)
 }
 
 func (p *parser) parseMap() (Value, error) {
@@ -441,12 +403,12 @@ func (p *parser) parseMap() (Value, error) {
 		return nil, err
 	}
 	m := Map{}
-	for p.tok.kind != tokRBrace {
+	for p.tok.Kind != syntax.RBrace {
 		k, err := p.parseValue()
 		if err != nil {
 			return nil, err
 		}
-		if err := p.expect(tokColon); err != nil {
+		if err := p.expect(syntax.Colon); err != nil {
 			return nil, err
 		}
 		v, err := p.parseValue()
@@ -454,88 +416,12 @@ func (p *parser) parseMap() (Value, error) {
 			return nil, err
 		}
 		m = append(m, MapEntry{Key: k, Value: v})
-		if p.tok.kind != tokComma {
+		if p.tok.Kind != syntax.Comma {
 			break
 		}
 		if err := p.next(); err != nil {
 			return nil, err
 		}
 	}
-	return m, p.expect(tokRBrace)
-}
-
-type intRange struct {
-	min, max *big.Int
-}
-
-func bitRange(bits uint, signed bool) intRange {
-	if signed {
-		m := new(big.Int).Lsh(big.NewInt(1), bits-1)
-		return intRange{min: new(big.Int).Neg(m), max: m.Sub(m, big.NewInt(1))}
-	}
-	m := new(big.Int).Lsh(big.NewInt(1), bits)
-	return intRange{min: new(big.Int), max: m.Sub(m, big.NewInt(1))}
-}
-
-var suffixRanges = map[string]intRange{
-	"i8": bitRange(8, true), "i16": bitRange(16, true), "i32": bitRange(32, true),
-	"i64": bitRange(64, true), "i128": bitRange(128, true), "isize": bitRange(64, true),
-	"u8": bitRange(8, false), "u16": bitRange(16, false), "u32": bitRange(32, false),
-	"u64": bitRange(64, false), "u128": bitRange(128, false), "usize": bitRange(64, false),
-}
-
-type literalError string
-
-func (e literalError) Error() string { return string(e) }
-
-func parseIntToken(t token) (Value, error) {
-	s := t.str
-	neg := strings.HasPrefix(s, "-")
-	s = strings.TrimPrefix(s, "-")
-	base := 10
-	if len(s) > 2 && s[0] == '0' {
-		switch s[1] {
-		case 'x':
-			base = 16
-		case 'o':
-			base = 8
-		case 'b':
-			base = 2
-		}
-		if base != 10 {
-			s = s[2:]
-		}
-	}
-	n, ok := new(big.Int).SetString(s, base)
-	if !ok {
-		return nil, literalError("invalid integer " + strconv.Quote(t.raw))
-	}
-	if neg {
-		n.Neg(n)
-	}
-	if t.suffix != "" {
-		r := suffixRanges[t.suffix]
-		if n.Cmp(r.min) < 0 || n.Cmp(r.max) > 0 {
-			return nil, literalError("integer " + t.raw + " out of range for " + t.suffix)
-		}
-	}
-	return Int{n: n}, nil
-}
-
-func parseFloatToken(t token) (Value, error) {
-	bits := 64
-	if t.suffix == "f32" {
-		bits = 32
-	}
-	if strings.TrimLeft(t.str, "+-") == "NaN" {
-		return Float(math.NaN()), nil
-	}
-	f, err := strconv.ParseFloat(t.str, bits)
-	if err != nil {
-		if ne, ok := err.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {
-			return Float(f), nil
-		}
-		return nil, literalError("invalid float " + strconv.Quote(t.raw))
-	}
-	return Float(f), nil
+	return m, p.expect(syntax.RBrace)
 }

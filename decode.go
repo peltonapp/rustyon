@@ -13,6 +13,9 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/peltonapp/rustyon-go/internal/fields"
+	"github.com/peltonapp/rustyon-go/internal/syntax"
 )
 
 // Unmarshaler is implemented by types that can unmarshal a RON value
@@ -108,7 +111,7 @@ func (dec *Decoder) More() bool {
 	if err := dec.init(); err != nil {
 		return true // let Decode report the error
 	}
-	return dec.p.tok.kind != tokEOF
+	return dec.p.tok.Kind != syntax.EOF
 }
 
 func (dec *Decoder) init() error {
@@ -125,7 +128,7 @@ func (dec *Decoder) init() error {
 	if dec.err != nil {
 		return dec.err
 	}
-	for dec.p.tok.kind == tokHash {
+	for dec.p.tok.Kind == syntax.Hash {
 		if _, err := dec.p.parseAttribute(); err != nil {
 			dec.err = err
 			return err
@@ -140,7 +143,7 @@ func (dec *Decoder) Decode(v any) error {
 	if err := dec.init(); err != nil {
 		return err
 	}
-	if dec.p.tok.kind == tokEOF {
+	if dec.p.tok.Kind == syntax.EOF {
 		return io.EOF
 	}
 	val, err := dec.p.parseValue()
@@ -321,7 +324,7 @@ func (d *decoder) decode(v Value, rv reflect.Value) error {
 		case Float:
 			f = float64(v)
 		case Int:
-			f, _ = new(big.Float).SetInt(v.big()).Float64()
+			f = v.Float64()
 		default:
 			return d.typeError(v, t, "")
 		}
@@ -414,16 +417,16 @@ func (d *decoder) decodeVariantBody(v Value, name string, rv reflect.Value) erro
 	d.push("(" + name + ")")
 	defer d.pop()
 	if t.Kind() == reflect.Struct && !hasCustomUnmarshaler(t) {
-		si := cachedStructInfo(t)
+		si := fields.For(t)
 		switch v := v.(type) {
 		case Ident, String:
 			return nil // unit variant, all fields zero
 		case Tuple:
-			if len(si.fields) == 0 && len(v.Values) == 0 {
+			if len(si.Fields) == 0 && len(v.Values) == 0 {
 				return nil
 			}
 			// A newtype variant around a struct: Name((a: 1)).
-			if !si.tuple && len(v.Values) == 1 {
+			if !si.Tuple && len(v.Values) == 1 {
 				if _, ok := v.Values[0].(Struct); ok {
 					return d.decodeStruct(v.Values[0], rv)
 				}
@@ -603,39 +606,36 @@ func keyString(k Value) string {
 
 func (d *decoder) decodeStruct(v Value, rv reflect.Value) error {
 	t := rv.Type()
-	si := cachedStructInfo(t)
+	si := fields.For(t)
 
 	// unwrap_newtypes: a single field tuple struct written as its inner value.
-	if si.isNewtype() {
+	if si.IsNewtype() {
 		if tup, ok := v.(Tuple); !ok || len(tup.Values) != 1 {
-			return d.decodeField(v, rv, si.fields[0])
+			return d.decodeField(v, rv, &si.Fields[0])
 		}
 	}
 
 	switch v := v.(type) {
 	case Struct:
 		for _, f := range v.Fields {
-			idx, ok := si.byName[f.Name]
-			if !ok {
-				idx, ok = si.byFold[strings.ToLower(f.Name)]
-			}
+			fi, ok := si.Lookup(f.Name)
 			if !ok {
 				if d.opts.disallowUnknown {
 					return &UnknownFieldError{Field: f.Name, Type: t, Path: d.pathString()}
 				}
 				continue
 			}
-			if err := d.decodeField(f.Value, rv, si.fields[idx]); err != nil {
+			if err := d.decodeField(f.Value, rv, fi); err != nil {
 				return err
 			}
 		}
 		return nil
 	case Tuple:
-		if len(v.Values) != len(si.fields) {
-			return d.typeError(v, t, fmt.Sprintf("expected %d elements, found %d", len(si.fields), len(v.Values)))
+		if len(v.Values) != len(si.Fields) {
+			return d.typeError(v, t, fmt.Sprintf("expected %d elements, found %d", len(si.Fields), len(v.Values)))
 		}
 		for i, e := range v.Values {
-			if err := d.decodeField(e, rv, si.fields[i]); err != nil {
+			if err := d.decodeField(e, rv, &si.Fields[i]); err != nil {
 				return err
 			}
 		}
@@ -651,33 +651,30 @@ func (d *decoder) decodeStruct(v Value, rv reflect.Value) error {
 			default:
 				return d.typeError(v, t, "map keys must be strings to decode into a struct")
 			}
-			idx, ok := si.byName[name]
-			if !ok {
-				idx, ok = si.byFold[strings.ToLower(name)]
-			}
+			fi, ok := si.Lookup(name)
 			if !ok {
 				if d.opts.disallowUnknown {
 					return &UnknownFieldError{Field: name, Type: t, Path: d.pathString()}
 				}
 				continue
 			}
-			if err := d.decodeField(e.Value, rv, si.fields[idx]); err != nil {
+			if err := d.decodeField(e.Value, rv, fi); err != nil {
 				return err
 			}
 		}
 		return nil
 	case Unit, Ident:
-		if len(si.fields) == 0 {
+		if len(si.Fields) == 0 {
 			return nil
 		}
 	}
 	return d.typeError(v, t, "")
 }
 
-func (d *decoder) decodeField(v Value, rv reflect.Value, f fieldInfo) error {
-	d.push(f.name)
+func (d *decoder) decodeField(v Value, rv reflect.Value, f *fields.Field) error {
+	d.push(f.Name)
 	defer d.pop()
-	fv := fieldByIndex(rv, f.index, true)
+	fv := fields.ByIndex(rv, f.Index, true)
 	return d.decode(v, fv)
 }
 

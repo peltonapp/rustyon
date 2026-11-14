@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Arne K. (TRC-Loop)
 // SPDX-License-Identifier: BSD-3-Clause
 
-package rustyon
+// Package fields computes and caches the RON view of Go struct types:
+// field names, tag options and embedded struct promotion.
+package fields
 
 import (
 	"reflect"
@@ -11,31 +13,48 @@ import (
 	"unicode"
 )
 
-// structInfo is the cached RON view of a Go struct type.
-type structInfo struct {
-	name   string // RON struct name: from a `_` field tag or the Go type name
-	tuple  bool   // encode as a tuple struct
-	fields []fieldInfo
+// Info is the RON view of a Go struct type.
+type Info struct {
+	Name   string // RON struct name: from a `_` field tag or the Go type name
+	Tuple  bool   // encode as a tuple struct
+	Fields []Field
 	byName map[string]int
 	byFold map[string]int
 }
 
-type fieldInfo struct {
-	name      string
-	index     []int
-	typ       reflect.Type
-	omitEmpty bool
-	omitZero  bool
+// Field is a single encodable struct field.
+type Field struct {
+	Name      string
+	Index     []int
+	Type      reflect.Type
+	OmitEmpty bool
+	OmitZero  bool
 }
 
-var structCache sync.Map // reflect.Type to *structInfo
+// IsNewtype reports whether the struct is a tuple struct with one field.
+func (si *Info) IsNewtype() bool { return si.Tuple && len(si.Fields) == 1 }
 
-func cachedStructInfo(t reflect.Type) *structInfo {
-	if si, ok := structCache.Load(t); ok {
-		return si.(*structInfo)
+// Lookup finds a field by exact name, then case-insensitively.
+func (si *Info) Lookup(name string) (*Field, bool) {
+	idx, ok := si.byName[name]
+	if !ok {
+		idx, ok = si.byFold[strings.ToLower(name)]
 	}
-	si, _ := structCache.LoadOrStore(t, buildStructInfo(t))
-	return si.(*structInfo)
+	if !ok {
+		return nil, false
+	}
+	return &si.Fields[idx], true
+}
+
+var cache sync.Map // reflect.Type to *Info
+
+// For returns the cached Info for a struct type.
+func For(t reflect.Type) *Info {
+	if si, ok := cache.Load(t); ok {
+		return si.(*Info)
+	}
+	si, _ := cache.LoadOrStore(t, build(t))
+	return si.(*Info)
 }
 
 func parseTag(tag string) (name string, opts []string) {
@@ -46,8 +65,8 @@ func parseTag(tag string) (name string, opts []string) {
 	return name, opts
 }
 
-func buildStructInfo(t reflect.Type) *structInfo {
-	si := &structInfo{name: t.Name(), byName: map[string]int{}, byFold: map[string]int{}}
+func build(t reflect.Type) *Info {
+	si := &Info{Name: t.Name(), byName: map[string]int{}, byFold: map[string]int{}}
 	for i := range t.NumField() {
 		f := t.Field(i)
 		if f.Name != "_" {
@@ -55,13 +74,13 @@ func buildStructInfo(t reflect.Type) *structInfo {
 		}
 		name, opts := parseTag(f.Tag.Get("ron"))
 		if name != "" {
-			si.name = name
+			si.Name = name
 		}
-		si.tuple = si.tuple || slices.Contains(opts, "tuple")
+		si.Tuple = si.Tuple || slices.Contains(opts, "tuple")
 	}
 
 	type candidate struct {
-		fieldInfo
+		Field
 		depth  int
 		tagged bool
 	}
@@ -102,15 +121,15 @@ func buildStructInfo(t reflect.Type) *structInfo {
 			}
 			tagged := name != ""
 			if !tagged {
-				name = snakeCase(f.Name)
+				name = SnakeCase(f.Name)
 			}
 			cands = append(cands, candidate{
-				fieldInfo: fieldInfo{
-					name:      name,
-					index:     idx,
-					typ:       f.Type,
-					omitEmpty: slices.Contains(opts, "omitempty"),
-					omitZero:  slices.Contains(opts, "omitzero"),
+				Field: Field{
+					Name:      name,
+					Index:     idx,
+					Type:      f.Type,
+					OmitEmpty: slices.Contains(opts, "omitempty"),
+					OmitZero:  slices.Contains(opts, "omitzero"),
 				},
 				depth:  depth,
 				tagged: tagged,
@@ -122,21 +141,20 @@ func buildStructInfo(t reflect.Type) *structInfo {
 	// Resolve name conflicts like encoding/json: the shallowest field wins,
 	// a tagged field wins over untagged ones at the same depth, and
 	// remaining ties hide the name entirely.
-	byName := map[string][]candidate{}
+	groups := map[string][]candidate{}
 	for _, c := range cands {
-		byName[c.name] = append(byName[c.name], c)
+		groups[c.Name] = append(groups[c.Name], c)
 	}
 	for _, c := range cands {
-		group := byName[c.name]
-		if !dominant(c, group, func(x candidate) (int, bool) { return x.depth, x.tagged }) {
+		if !dominant(c, groups[c.Name], func(x candidate) (int, bool) { return x.depth, x.tagged }) {
 			continue
 		}
-		si.byName[c.name] = len(si.fields)
-		fold := strings.ToLower(c.name)
+		si.byName[c.Name] = len(si.Fields)
+		fold := strings.ToLower(c.Name)
 		if _, ok := si.byFold[fold]; !ok {
-			si.byFold[fold] = len(si.fields)
+			si.byFold[fold] = len(si.Fields)
 		}
-		si.fields = append(si.fields, c.fieldInfo)
+		si.Fields = append(si.Fields, c.Field)
 	}
 	return si
 }
@@ -149,12 +167,12 @@ func dominant[T any](c T, group []T, key func(T) (int, bool)) bool {
 			minDepth = d
 		}
 	}
-	var atMin, taggedAtMin []T
+	atMin, taggedAtMin := 0, 0
 	for _, g := range group {
 		if d, tagged := key(g); d == minDepth {
-			atMin = append(atMin, g)
+			atMin++
 			if tagged {
-				taggedAtMin = append(taggedAtMin, g)
+				taggedAtMin++
 			}
 		}
 	}
@@ -162,15 +180,15 @@ func dominant[T any](c T, group []T, key func(T) (int, bool)) bool {
 	if cd != minDepth {
 		return false
 	}
-	if len(atMin) == 1 {
+	if atMin == 1 {
 		return true
 	}
-	return ctagged && len(taggedAtMin) == 1
+	return ctagged && taggedAtMin == 1
 }
 
-// snakeCase converts a Go identifier such as MaxHP or HTTPServer to
+// SnakeCase converts a Go identifier such as MaxHP or HTTPServer to
 // snake_case (max_hp, http_server).
-func snakeCase(s string) string {
+func SnakeCase(s string) string {
 	runes := []rune(s)
 	var sb strings.Builder
 	sb.Grow(len(s) + 4)
@@ -191,10 +209,10 @@ func snakeCase(s string) string {
 	return sb.String()
 }
 
-// fieldByIndex returns the field at index, allocating nil embedded pointers
-// when alloc is set. It returns an invalid Value when a nil embedded pointer
-// is encountered and alloc is false.
-func fieldByIndex(v reflect.Value, index []int, alloc bool) reflect.Value {
+// ByIndex returns the field at index, allocating nil embedded pointers when
+// alloc is set. It returns an invalid Value when a nil embedded pointer is
+// encountered and alloc is false.
+func ByIndex(v reflect.Value, index []int, alloc bool) reflect.Value {
 	for i, x := range index {
 		if i > 0 && v.Kind() == reflect.Pointer {
 			if v.IsNil() {
@@ -209,6 +227,3 @@ func fieldByIndex(v reflect.Value, index []int, alloc bool) reflect.Value {
 	}
 	return v
 }
-
-// isNewtype reports whether a struct is a tuple struct with one field.
-func (si *structInfo) isNewtype() bool { return si.tuple && len(si.fields) == 1 }

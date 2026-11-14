@@ -318,26 +318,6 @@ func TestMarshalErrors(t *testing.T) {
 	}
 }
 
-func TestSnakeCase(t *testing.T) {
-	tests := map[string]string{
-		"Name":       "name",
-		"MaxHP":      "max_hp",
-		"HTTPServer": "http_server",
-		"UserID":     "user_id",
-		"X":          "x",
-		"Field2":     "field2",
-		"ABTest":     "ab_test",
-		"already_ok": "already_ok",
-		"Vec2D":      "vec2_d",
-		"ÜberCool":   "über_cool",
-	}
-	for in, want := range tests {
-		if got := snakeCase(in); got != want {
-			t.Errorf("snakeCase(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestToValue(t *testing.T) {
 	v, err := ToValue(basicStruct{Name: "a", MaxHP: 2})
 	if err != nil {

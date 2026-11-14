@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"math"
 	"math/big"
+	"strconv"
 )
 
 // Kind identifies the concrete type of a [Value].
@@ -72,10 +73,12 @@ type Unit struct{}
 type Bool bool
 
 // Int is an integer of arbitrary size. RON allows integers up to 128 bits,
-// which do not fit into Go's builtin integer types, so Int is backed by a
-// [big.Int]. The zero value represents 0.
+// which do not fit into Go's builtin integer types. Values that fit into an
+// int64 are stored inline; larger ones use a [big.Int]. The zero value
+// represents 0.
 type Int struct {
-	n *big.Int
+	small int64
+	b     *big.Int // non-nil only for values outside the int64 range
 }
 
 // Float is a floating point value.
@@ -144,47 +147,97 @@ func Some(v Value) Option { return Option{Value: v} }
 func (o Option) IsNone() bool { return o.Value == nil }
 
 // NewInt returns an [Int] holding v.
-func NewInt(v int64) Int { return Int{n: big.NewInt(v)} }
+func NewInt(v int64) Int { return Int{small: v} }
 
 // NewUint returns an [Int] holding v.
-func NewUint(v uint64) Int { return Int{n: new(big.Int).SetUint64(v)} }
+func NewUint(v uint64) Int {
+	if v <= math.MaxInt64 {
+		return Int{small: int64(v)}
+	}
+	return Int{b: new(big.Int).SetUint64(v)}
+}
 
 // NewBigInt returns an [Int] holding a copy of v.
-func NewBigInt(v *big.Int) Int { return Int{n: new(big.Int).Set(v)} }
-
-func (i Int) big() *big.Int {
-	if i.n == nil {
-		return new(big.Int)
+func NewBigInt(v *big.Int) Int {
+	if v.IsInt64() {
+		return Int{small: v.Int64()}
 	}
-	return i.n
+	return Int{b: new(big.Int).Set(v)}
+}
+
+func (i Int) bigInt() *big.Int {
+	if i.b != nil {
+		return i.b
+	}
+	return big.NewInt(i.small)
 }
 
 // Big returns a copy of the integer as a [big.Int].
-func (i Int) Big() *big.Int { return new(big.Int).Set(i.big()) }
+func (i Int) Big() *big.Int { return new(big.Int).Set(i.bigInt()) }
 
 // Int64 returns the integer as an int64 and reports whether it fits.
 func (i Int) Int64() (int64, bool) {
-	b := i.big()
-	if !b.IsInt64() {
+	if i.b != nil {
 		return 0, false
 	}
-	return b.Int64(), true
+	return i.small, true
 }
 
 // Uint64 returns the integer as a uint64 and reports whether it fits.
 func (i Int) Uint64() (uint64, bool) {
-	b := i.big()
-	if !b.IsUint64() {
+	if i.b == nil {
+		return uint64(i.small), i.small >= 0
+	}
+	if !i.b.IsUint64() {
 		return 0, false
 	}
-	return b.Uint64(), true
+	return i.b.Uint64(), true
+}
+
+// Float64 returns the nearest float64 to the integer.
+func (i Int) Float64() float64 {
+	if i.b == nil {
+		return float64(i.small)
+	}
+	f, _ := new(big.Float).SetInt(i.b).Float64()
+	return f
 }
 
 // Sign returns -1, 0 or 1 depending on the sign of the integer.
-func (i Int) Sign() int { return i.big().Sign() }
+func (i Int) Sign() int {
+	if i.b != nil {
+		return i.b.Sign()
+	}
+	switch {
+	case i.small < 0:
+		return -1
+	case i.small > 0:
+		return 1
+	}
+	return 0
+}
+
+// Cmp compares i and j and returns -1, 0 or 1.
+func (i Int) Cmp(j Int) int {
+	if i.b == nil && j.b == nil {
+		switch {
+		case i.small < j.small:
+			return -1
+		case i.small > j.small:
+			return 1
+		}
+		return 0
+	}
+	return i.bigInt().Cmp(j.bigInt())
+}
 
 // String returns the decimal representation of the integer.
-func (i Int) String() string { return i.big().String() }
+func (i Int) String() string {
+	if i.b == nil {
+		return strconv.FormatInt(i.small, 10)
+	}
+	return i.b.String()
+}
 
 // Get returns the value of the field with the given name.
 func (s Struct) Get(name string) (Value, bool) {
@@ -274,7 +327,7 @@ func Equal(a, b Value) bool {
 	case Bool:
 		return a == b.(Bool)
 	case Int:
-		return a.big().Cmp(b.(Int).big()) == 0
+		return a.Cmp(b.(Int)) == 0
 	case Float:
 		bf := b.(Float)
 		if math.IsNaN(float64(a)) {

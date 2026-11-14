@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Arne K. (TRC-Loop)
 // SPDX-License-Identifier: BSD-3-Clause
 
-package rustyon
+// Package syntax holds the RON lexer, literal decoding and the comment
+// preserving formatter. The public API lives in the root rustyon package.
+package syntax
 
 import (
 	"fmt"
@@ -11,101 +13,163 @@ import (
 	"unicode/utf8"
 )
 
-type tokenKind uint8
+// MaxDepth limits nesting to protect against stack exhaustion on hostile
+// input.
+const MaxDepth = 1000
 
+// Kind is the type of a token.
+type Kind uint8
+
+// Token kinds.
 const (
-	tokEOF tokenKind = iota
-	tokLParen
-	tokRParen
-	tokLBracket
-	tokRBracket
-	tokLBrace
-	tokRBrace
-	tokComma
-	tokColon
-	tokHash
-	tokBang
-	tokIdent
-	tokInt
-	tokFloat
-	tokString
-	tokByteString
-	tokChar
-	tokByte
-	tokLineComment
-	tokBlockComment
+	EOF Kind = iota
+	LParen
+	RParen
+	LBracket
+	RBracket
+	LBrace
+	RBrace
+	Comma
+	Colon
+	Hash
+	Bang
+	Ident
+	Int
+	Float
+	String
+	ByteString
+	Char
+	Byte
+	LineComment
+	BlockComment
 )
 
-var tokenNames = [...]string{
-	tokEOF:          "end of input",
-	tokLParen:       "'('",
-	tokRParen:       "')'",
-	tokLBracket:     "'['",
-	tokRBracket:     "']'",
-	tokLBrace:       "'{'",
-	tokRBrace:       "'}'",
-	tokComma:        "','",
-	tokColon:        "':'",
-	tokHash:         "'#'",
-	tokBang:         "'!'",
-	tokIdent:        "identifier",
-	tokInt:          "integer",
-	tokFloat:        "float",
-	tokString:       "string",
-	tokByteString:   "byte string",
-	tokChar:         "char",
-	tokByte:         "byte literal",
-	tokLineComment:  "comment",
-	tokBlockComment: "comment",
+var kindNames = [...]string{
+	EOF:          "end of input",
+	LParen:       "'('",
+	RParen:       "')'",
+	LBracket:     "'['",
+	RBracket:     "']'",
+	LBrace:       "'{'",
+	RBrace:       "'}'",
+	Comma:        "','",
+	Colon:        "':'",
+	Hash:         "'#'",
+	Bang:         "'!'",
+	Ident:        "identifier",
+	Int:          "integer",
+	Float:        "float",
+	String:       "string",
+	ByteString:   "byte string",
+	Char:         "char",
+	Byte:         "byte literal",
+	LineComment:  "comment",
+	BlockComment: "comment",
 }
 
-func (k tokenKind) String() string { return tokenNames[k] }
+func (k Kind) String() string { return kindNames[k] }
 
-type token struct {
-	kind tokenKind
-	pos  Position
-	end  int    // byte offset just past the token
-	raw  string // the token's source text
+// IsComment reports whether the kind is a line or block comment.
+func (k Kind) IsComment() bool { return k == LineComment || k == BlockComment }
+
+// Position is a location in the source. Line and Column are 1-based;
+// Column counts Unicode code points. Offset is the 0-based byte offset.
+type Position struct {
+	Offset int
+	Line   int
+	Column int
+}
+
+// Error is a syntax error at a position.
+type Error struct {
+	Msg string
+	Pos Position
+}
+
+func (e *Error) Error() string { return fmt.Sprintf("%d:%d: %s", e.Pos.Line, e.Pos.Column, e.Msg) }
+
+// Errorf returns an *Error at p.
+func Errorf(p Position, format string, args ...any) *Error {
+	msg := format
+	if len(args) > 0 {
+		msg = fmt.Sprintf(format, args...)
+	}
+	return &Error{Msg: msg, Pos: p}
+}
+
+// Token is a lexical token.
+type Token struct {
+	Kind Kind
+	Pos  Position
+	End  int    // byte offset just past the token
+	Raw  string // the token's source text
 
 	// Decoded payload. For identifiers this is the name without any r#
 	// prefix, for numbers the literal without underscores and suffix, for
 	// strings and byte strings the decoded contents.
-	str    string
-	suffix string // numeric type suffix such as "u8" or "f32"
-	r      rune   // value of a char or byte literal
-	rawID  bool   // identifier was written as r#name
+	Str      string
+	Suffix   string // numeric type suffix such as "u8" or "f32"
+	Rune     rune   // value of a char or byte literal
+	RawIdent bool   // identifier was written as r#name
 
-	newlines int // newlines in the whitespace before the token
+	Newlines int // newlines in the whitespace before the token
 }
 
-type lexer struct {
+// Describe returns a short description of the token for error messages.
+func (t Token) Describe() string {
+	switch t.Kind {
+	case EOF:
+		return "end of input"
+	case Ident:
+		return "identifier " + t.Raw
+	case Int, Float, String, ByteString, Char, Byte:
+		raw := t.Raw
+		if len(raw) > 32 {
+			raw = raw[:29] + "..."
+		}
+		return t.Kind.String() + " " + raw
+	}
+	return t.Kind.String()
+}
+
+// Lexer splits RON source into tokens.
+type Lexer struct {
 	src  string
 	off  int
 	line int
 	col  int
 }
 
-func newLexer(src []byte) *lexer {
-	l := &lexer{src: string(src), line: 1, col: 1}
-	// Skip a UTF-8 byte order mark.
+// NewLexer returns a lexer for src. A leading UTF-8 byte order mark is
+// skipped.
+func NewLexer(src []byte) *Lexer {
+	l := &Lexer{src: string(src), line: 1, col: 1}
 	if strings.HasPrefix(l.src, "\xEF\xBB\xBF") {
 		l.off = 3
 	}
 	return l
 }
 
-func (l *lexer) pos() Position { return Position{Offset: l.off, Line: l.line, Column: l.col} }
+// Pos returns the current position.
+func (l *Lexer) Pos() Position { return Position{Offset: l.off, Line: l.line, Column: l.col} }
 
-func (l *lexer) errorf(p Position, format string, args ...any) error {
-	msg := format
-	if len(args) > 0 {
-		msg = fmt.Sprintf(format, args...)
+// CheckUTF8 returns an error at the first invalid UTF-8 sequence in src.
+func CheckUTF8(src []byte) *Error {
+	if utf8.Valid(src) {
+		return nil
 	}
-	return &SyntaxError{Msg: msg, Pos: p}
+	l := NewLexer(src)
+	for l.off < len(l.src) {
+		if r, size := utf8.DecodeRuneInString(l.src[l.off:]); r == utf8.RuneError && size == 1 {
+			break
+		}
+		l.advance()
+	}
+	return Errorf(l.Pos(), "invalid UTF-8 encoding")
 }
 
-// peek returns the rune at off+n bytes, or -1 at end of input.
-func (l *lexer) peekAt(n int) rune {
+// peekAt returns the rune at off+n bytes, or -1 at end of input.
+func (l *Lexer) peekAt(n int) rune {
 	if l.off+n >= len(l.src) {
 		return -1
 	}
@@ -117,10 +181,10 @@ func (l *lexer) peekAt(n int) rune {
 	return r
 }
 
-func (l *lexer) peek() rune { return l.peekAt(0) }
+func (l *Lexer) peek() rune { return l.peekAt(0) }
 
 // advance consumes one rune and returns it.
-func (l *lexer) advance() rune {
+func (l *Lexer) advance() rune {
 	if l.off >= len(l.src) {
 		return -1
 	}
@@ -146,22 +210,25 @@ func isWhitespace(r rune) bool {
 	return false
 }
 
-func isIdentStart(r rune) bool {
+// IsIdentStart reports whether r can start an identifier.
+func IsIdentStart(r rune) bool {
 	return r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= utf8.RuneSelf && unicode.IsLetter(r))
 }
 
-func isIdentContinue(r rune) bool {
-	return isIdentStart(r) || (r >= '0' && r <= '9') || (r >= utf8.RuneSelf && (unicode.IsDigit(r) || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Mc, r) || unicode.Is(unicode.Pc, r)))
+// IsIdentContinue reports whether r can continue an identifier.
+func IsIdentContinue(r rune) bool {
+	return IsIdentStart(r) || (r >= '0' && r <= '9') || (r >= utf8.RuneSelf && (unicode.IsDigit(r) || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Mc, r) || unicode.Is(unicode.Pc, r)))
 }
 
-func isRawIdentContinue(r rune) bool {
-	return isIdentContinue(r) || r == '.' || r == '+' || r == '-'
+// IsRawIdentContinue reports whether r can appear in a raw identifier.
+func IsRawIdentContinue(r rune) bool {
+	return IsIdentContinue(r) || r == '.' || r == '+' || r == '-'
 }
 
 func isDigit(r rune) bool { return r >= '0' && r <= '9' }
 
-// next returns the next token, including comments.
-func (l *lexer) next() (token, error) {
+// Next returns the next token, including comments.
+func (l *Lexer) Next() (Token, error) {
 	newlines := 0
 	for {
 		r := l.peek()
@@ -173,90 +240,90 @@ func (l *lexer) next() (token, error) {
 		}
 		l.advance()
 	}
-	start := l.pos()
+	start := l.Pos()
 	tok, err := l.scan(start)
 	if err != nil {
-		return token{}, err
+		return Token{}, err
 	}
-	tok.pos = start
-	tok.end = l.off
-	tok.raw = l.src[start.Offset:l.off]
-	tok.newlines = newlines
+	tok.Pos = start
+	tok.End = l.off
+	tok.Raw = l.src[start.Offset:l.off]
+	tok.Newlines = newlines
 	return tok, nil
 }
 
-func (l *lexer) scan(start Position) (token, error) {
+func (l *Lexer) scan(start Position) (Token, error) {
 	r := l.peek()
 	switch r {
 	case -1:
-		return token{kind: tokEOF}, nil
+		return Token{Kind: EOF}, nil
 	case '(':
 		l.advance()
-		return token{kind: tokLParen}, nil
+		return Token{Kind: LParen}, nil
 	case ')':
 		l.advance()
-		return token{kind: tokRParen}, nil
+		return Token{Kind: RParen}, nil
 	case '[':
 		l.advance()
-		return token{kind: tokLBracket}, nil
+		return Token{Kind: LBracket}, nil
 	case ']':
 		l.advance()
-		return token{kind: tokRBracket}, nil
+		return Token{Kind: RBracket}, nil
 	case '{':
 		l.advance()
-		return token{kind: tokLBrace}, nil
+		return Token{Kind: LBrace}, nil
 	case '}':
 		l.advance()
-		return token{kind: tokRBrace}, nil
+		return Token{Kind: RBrace}, nil
 	case ',':
 		l.advance()
-		return token{kind: tokComma}, nil
+		return Token{Kind: Comma}, nil
 	case ':':
 		l.advance()
-		return token{kind: tokColon}, nil
+		return Token{Kind: Colon}, nil
 	case '#':
 		l.advance()
-		return token{kind: tokHash}, nil
+		return Token{Kind: Hash}, nil
 	case '!':
 		l.advance()
-		return token{kind: tokBang}, nil
+		return Token{Kind: Bang}, nil
 	case '/':
 		switch l.peekAt(1) {
 		case '/':
 			for r := l.peek(); r != -1 && r != '\n'; r = l.peek() {
 				l.advance()
 			}
-			return token{kind: tokLineComment}, nil
+			return Token{Kind: LineComment}, nil
 		case '*':
 			return l.scanBlockComment(start)
 		}
-		return token{}, l.errorf(start, "unexpected character '/'")
+		return Token{}, Errorf(start, "unexpected character '/'")
 	case '"':
 		l.advance()
 		s, err := l.scanQuoted(start, '"', false)
-		return token{kind: tokString, str: s}, err
+		return Token{Kind: String, Str: s}, err
 	case '\'':
 		l.advance()
 		c, err := l.scanChar(start, false)
-		return token{kind: tokChar, r: c}, err
+		return Token{Kind: Char, Rune: c}, err
 	case 'b':
 		switch l.peekAt(1) {
 		case '"':
 			l.advance()
 			l.advance()
 			s, err := l.scanQuoted(start, '"', true)
-			return token{kind: tokByteString, str: s}, err
+			return Token{Kind: ByteString, Str: s}, err
 		case '\'':
 			l.advance()
 			l.advance()
 			c, err := l.scanChar(start, true)
-			return token{kind: tokByte, r: c}, err
+			return Token{Kind: Byte, Rune: c}, err
 		case 'r':
 			if n := l.peekAt(2); n == '"' || n == '#' {
 				l.advance()
 				l.advance()
 				s, err := l.scanRaw(start)
-				return token{kind: tokByteString, str: s}, err
+				return Token{Kind: ByteString, Str: s}, err
 			}
 		}
 	case 'r':
@@ -264,7 +331,7 @@ func (l *lexer) scan(start Position) (token, error) {
 		case '"':
 			l.advance()
 			s, err := l.scanRaw(start)
-			return token{kind: tokString, str: s}, err
+			return Token{Kind: String, Str: s}, err
 		case '#':
 			// Either a raw string r#"..."# or a raw identifier r#name.
 			i := 1
@@ -274,43 +341,43 @@ func (l *lexer) scan(start Position) (token, error) {
 			if l.peekAt(i) == '"' {
 				l.advance()
 				s, err := l.scanRaw(start)
-				return token{kind: tokString, str: s}, err
+				return Token{Kind: String, Str: s}, err
 			}
-			if i == 2 && isRawIdentContinue(l.peekAt(2)) {
+			if i == 2 && IsRawIdentContinue(l.peekAt(2)) {
 				l.advance()
 				l.advance()
 				b := l.off
-				for isRawIdentContinue(l.peek()) {
+				for IsRawIdentContinue(l.peek()) {
 					l.advance()
 				}
-				return token{kind: tokIdent, str: l.src[b:l.off], rawID: true}, nil
+				return Token{Kind: Ident, Str: l.src[b:l.off], RawIdent: true}, nil
 			}
 		}
 	}
 	if isDigit(r) || r == '+' || r == '-' || (r == '.' && isDigit(l.peekAt(1))) {
 		return l.scanNumber(start)
 	}
-	if isIdentStart(r) {
+	if IsIdentStart(r) {
 		b := l.off
-		for isIdentContinue(l.peek()) {
+		for IsIdentContinue(l.peek()) {
 			l.advance()
 		}
-		return token{kind: tokIdent, str: l.src[b:l.off]}, nil
+		return Token{Kind: Ident, Str: l.src[b:l.off]}, nil
 	}
 	if r == utf8.RuneError {
-		return token{}, l.errorf(start, "invalid UTF-8 encoding")
+		return Token{}, Errorf(start, "invalid UTF-8 encoding")
 	}
-	return token{}, l.errorf(start, "unexpected character %q", r)
+	return Token{}, Errorf(start, "unexpected character %q", r)
 }
 
-func (l *lexer) scanBlockComment(start Position) (token, error) {
+func (l *Lexer) scanBlockComment(start Position) (Token, error) {
 	l.advance()
 	l.advance()
 	depth := 1
 	for depth > 0 {
 		switch l.peek() {
 		case -1:
-			return token{}, l.errorf(start, "unterminated block comment")
+			return Token{}, Errorf(start, "unterminated block comment")
 		case '/':
 			l.advance()
 			if l.peek() == '*' {
@@ -327,25 +394,25 @@ func (l *lexer) scanBlockComment(start Position) (token, error) {
 			l.advance()
 		}
 	}
-	return token{kind: tokBlockComment}, nil
+	return Token{Kind: BlockComment}, nil
 }
 
 // scanRaw scans a raw string after the leading r (or br). The lexer is
 // positioned at the first '#' or the opening quote.
-func (l *lexer) scanRaw(start Position) (string, error) {
+func (l *Lexer) scanRaw(start Position) (string, error) {
 	hashes := 0
 	for l.peek() == '#' {
 		l.advance()
 		hashes++
 	}
 	if l.peek() != '"' {
-		return "", l.errorf(start, "expected '\"' to start raw string")
+		return "", Errorf(start, "expected '\"' to start raw string")
 	}
 	l.advance()
 	closing := "\"" + strings.Repeat("#", hashes)
 	idx := strings.Index(l.src[l.off:], closing)
 	if idx < 0 {
-		return "", l.errorf(start, "unterminated raw string")
+		return "", Errorf(start, "unterminated raw string")
 	}
 	s := l.src[l.off : l.off+idx]
 	for target := l.off + idx + len(closing); l.off < target; {
@@ -356,14 +423,28 @@ func (l *lexer) scanRaw(start Position) (string, error) {
 
 // scanQuoted scans a quoted string after the opening quote and returns the
 // decoded contents. For byte strings the result holds arbitrary bytes.
-func (l *lexer) scanQuoted(start Position, quote rune, byteStr bool) (string, error) {
+func (l *Lexer) scanQuoted(start Position, quote rune, byteStr bool) (string, error) {
+	// Fast path: no escapes before the closing quote.
+	if !byteStr {
+		rest := l.src[l.off:]
+		if i := strings.IndexAny(rest, `"\`); i >= 0 && rest[i] == '"' {
+			s := rest[:i]
+			for range s {
+				// advance updates line and column; strings are rarely long
+				// enough for this to matter.
+				l.advance()
+			}
+			l.advance()
+			return s, nil
+		}
+	}
 	var sb strings.Builder
 	for {
-		p := l.pos()
+		p := l.Pos()
 		r := l.peek()
 		switch {
 		case r == -1:
-			return "", l.errorf(start, "unterminated string")
+			return "", Errorf(start, "unterminated string")
 		case r == quote:
 			l.advance()
 			return sb.String(), nil
@@ -388,11 +469,11 @@ func (l *lexer) scanQuoted(start Position, quote rune, byteStr bool) (string, er
 		default:
 			if r == utf8.RuneError {
 				if _, size := utf8.DecodeRuneInString(l.src[l.off:]); size == 1 {
-					return "", l.errorf(p, "invalid UTF-8 encoding")
+					return "", Errorf(p, "invalid UTF-8 encoding")
 				}
 			}
 			if byteStr && r >= utf8.RuneSelf {
-				return "", l.errorf(p, "non-ASCII character in byte string")
+				return "", Errorf(p, "non-ASCII character in byte string")
 			}
 			l.advance()
 			sb.WriteRune(r)
@@ -401,13 +482,13 @@ func (l *lexer) scanQuoted(start Position, quote rune, byteStr bool) (string, er
 }
 
 // scanChar scans a char or byte literal after the opening quote.
-func (l *lexer) scanChar(start Position, byteLit bool) (rune, error) {
-	p := l.pos()
+func (l *Lexer) scanChar(start Position, byteLit bool) (rune, error) {
+	p := l.Pos()
 	r := l.peek()
 	var c rune
 	switch r {
 	case -1, '\'':
-		return 0, l.errorf(start, "empty or unterminated char literal")
+		return 0, Errorf(start, "empty or unterminated char literal")
 	case '\\':
 		l.advance()
 		var err error
@@ -417,15 +498,15 @@ func (l *lexer) scanChar(start Position, byteLit bool) (rune, error) {
 		}
 	default:
 		if byteLit && r >= utf8.RuneSelf {
-			return 0, l.errorf(p, "non-ASCII character in byte literal")
+			return 0, Errorf(p, "non-ASCII character in byte literal")
 		}
 		if r == utf8.RuneError {
-			return 0, l.errorf(p, "invalid UTF-8 encoding")
+			return 0, Errorf(p, "invalid UTF-8 encoding")
 		}
 		c = l.advance()
 	}
 	if l.peek() != '\'' {
-		return 0, l.errorf(start, "char literal must contain exactly one character")
+		return 0, Errorf(start, "char literal must contain exactly one character")
 	}
 	l.advance()
 	return c, nil
@@ -433,7 +514,7 @@ func (l *lexer) scanChar(start Position, byteLit bool) (rune, error) {
 
 // scanEscape decodes an escape sequence after the backslash. isByte reports
 // whether the result is a raw byte (from \x in a byte string).
-func (l *lexer) scanEscape(p Position, byteStr bool) (r rune, isByte bool, err error) {
+func (l *Lexer) scanEscape(p Position, byteStr bool) (r rune, isByte bool, err error) {
 	c := l.advance()
 	switch c {
 	case '"', '\'', '\\', '/':
@@ -453,43 +534,43 @@ func (l *lexer) scanEscape(p Position, byteStr bool) (r rune, isByte bool, err e
 	case 'x':
 		h := l.takeHex(2)
 		if len(h) != 2 {
-			return 0, false, l.errorf(p, "invalid \\x escape")
+			return 0, false, Errorf(p, "invalid \\x escape")
 		}
 		v, _ := strconv.ParseUint(h, 16, 8)
 		if !byteStr && v > 0x7F {
-			return 0, false, l.errorf(p, "\\x escape out of range, must be at most \\x7F in strings")
+			return 0, false, Errorf(p, "\\x escape out of range, must be at most \\x7F in strings")
 		}
 		return rune(v), byteStr, nil
 	case 'u':
 		if byteStr {
-			return 0, false, l.errorf(p, "unicode escape in byte string")
+			return 0, false, Errorf(p, "unicode escape in byte string")
 		}
 		var h string
 		if l.peek() == '{' {
 			l.advance()
 			h = l.takeHex(6)
 			if l.peek() != '}' || h == "" {
-				return 0, false, l.errorf(p, "invalid \\u{...} escape")
+				return 0, false, Errorf(p, "invalid \\u{...} escape")
 			}
 			l.advance()
 		} else {
 			h = l.takeHex(4)
 			if len(h) != 4 {
-				return 0, false, l.errorf(p, "invalid \\u escape")
+				return 0, false, Errorf(p, "invalid \\u escape")
 			}
 		}
 		v, _ := strconv.ParseUint(h, 16, 32)
 		if v > unicode.MaxRune || (v >= 0xD800 && v <= 0xDFFF) {
-			return 0, false, l.errorf(p, "invalid unicode code point in escape")
+			return 0, false, Errorf(p, "invalid unicode code point in escape")
 		}
 		return rune(v), false, nil
 	case -1:
-		return 0, false, l.errorf(p, "unterminated escape sequence")
+		return 0, false, Errorf(p, "unterminated escape sequence")
 	}
-	return 0, false, l.errorf(p, "unknown escape sequence \\%c", c)
+	return 0, false, Errorf(p, "unknown escape sequence \\%c", c)
 }
 
-func (l *lexer) takeHex(maxDigits int) string {
+func (l *Lexer) takeHex(maxDigits int) string {
 	b := l.off
 	for i := range maxDigits {
 		r := l.peek()
@@ -501,38 +582,33 @@ func (l *lexer) takeHex(maxDigits int) string {
 	return strings.ReplaceAll(l.src[b:l.off], "_", "")
 }
 
-var intSuffixes = map[string]bool{
-	"i8": true, "i16": true, "i32": true, "i64": true, "i128": true, "isize": true,
-	"u8": true, "u16": true, "u32": true, "u64": true, "u128": true, "usize": true,
-}
-
 // scanNumber scans integer and float literals including a leading sign,
 // base prefixes, underscores, exponents, type suffixes, inf and NaN.
-func (l *lexer) scanNumber(start Position) (token, error) {
+func (l *Lexer) scanNumber(start Position) (Token, error) {
 	var sb strings.Builder
 	if r := l.peek(); r == '+' || r == '-' {
 		l.advance()
 		if r == '-' {
 			sb.WriteRune(r)
 		}
-		if isIdentStart(l.peek()) {
+		if IsIdentStart(l.peek()) {
 			b := l.off
-			for isIdentContinue(l.peek()) {
+			for IsIdentContinue(l.peek()) {
 				l.advance()
 			}
 			word := l.src[b:l.off]
 			switch word {
 			case "inf", "NaN":
 				sb.WriteString(word)
-				return token{kind: tokFloat, str: sb.String()}, nil
+				return Token{Kind: Float, Str: sb.String()}, nil
 			case "inff32", "inff64", "NaNf32", "NaNf64":
 				sb.WriteString(word[:len(word)-3])
-				return token{kind: tokFloat, str: sb.String(), suffix: word[len(word)-3:]}, nil
+				return Token{Kind: Float, Str: sb.String(), Suffix: word[len(word)-3:]}, nil
 			}
-			return token{}, l.errorf(start, "expected number after sign, found %q", word)
+			return Token{}, Errorf(start, "expected number after sign, found %q", word)
 		}
 		if !isDigit(l.peek()) && !(l.peek() == '.' && isDigit(l.peekAt(1))) {
-			return token{}, l.errorf(start, "expected number after sign")
+			return Token{}, Errorf(start, "expected number after sign")
 		}
 	}
 
@@ -565,16 +641,16 @@ func (l *lexer) scanNumber(start Position) (token, error) {
 				digits++
 			}
 			if digits == 0 {
-				return token{}, l.errorf(start, "missing digits after base prefix")
+				return Token{}, Errorf(start, "missing digits after base prefix")
 			}
 			suffix := l.scanSuffix()
 			if suffix != "" && !intSuffixes[suffix] {
-				return token{}, l.errorf(start, "invalid integer suffix %q", suffix)
+				return Token{}, Errorf(start, "invalid integer suffix %q", suffix)
 			}
 			if isDigit(l.peek()) {
-				return token{}, l.errorf(start, "invalid digit for base %d literal", base)
+				return Token{}, Errorf(start, "invalid digit for base %d literal", base)
 			}
-			return token{kind: tokInt, str: sb.String(), suffix: suffix}, nil
+			return Token{Kind: Int, Str: sb.String(), Suffix: suffix}, nil
 		}
 	}
 
@@ -587,7 +663,7 @@ func (l *lexer) scanNumber(start Position) (token, error) {
 			digits++
 		}
 	}
-	if l.peek() == '.' && !isIdentStart(l.peekAt(1)) {
+	if l.peek() == '.' && !IsIdentStart(l.peekAt(1)) {
 		isFloat = true
 		l.advance()
 		sb.WriteByte('.')
@@ -600,7 +676,7 @@ func (l *lexer) scanNumber(start Position) (token, error) {
 		}
 	}
 	if digits == 0 {
-		return token{}, l.errorf(start, "invalid number")
+		return Token{}, Errorf(start, "invalid number")
 	}
 	if r := l.peek(); r == 'e' || r == 'E' {
 		n := 1
@@ -629,23 +705,23 @@ func (l *lexer) scanNumber(start Position) (token, error) {
 		isFloat = true
 	case intSuffixes[suffix]:
 		if isFloat {
-			return token{}, l.errorf(start, "integer suffix %q on float literal", suffix)
+			return Token{}, Errorf(start, "integer suffix %q on float literal", suffix)
 		}
 	default:
-		return token{}, l.errorf(start, "invalid number suffix %q", suffix)
+		return Token{}, Errorf(start, "invalid number suffix %q", suffix)
 	}
 	if isFloat {
-		return token{kind: tokFloat, str: sb.String(), suffix: suffix}, nil
+		return Token{Kind: Float, Str: sb.String(), Suffix: suffix}, nil
 	}
-	return token{kind: tokInt, str: sb.String(), suffix: suffix}, nil
+	return Token{Kind: Int, Str: sb.String(), Suffix: suffix}, nil
 }
 
-func (l *lexer) scanSuffix() string {
-	if !isIdentStart(l.peek()) {
+func (l *Lexer) scanSuffix() string {
+	if !IsIdentStart(l.peek()) {
 		return ""
 	}
 	b := l.off
-	for isIdentContinue(l.peek()) {
+	for IsIdentContinue(l.peek()) {
 		l.advance()
 	}
 	return l.src[b:l.off]

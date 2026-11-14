@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+
+	"github.com/peltonapp/rustyon-go/internal/fields"
 )
 
 // Marshaler is implemented by types that can marshal themselves into RON.
@@ -206,11 +208,11 @@ func (e *encoder) encodeVariant(rv reflect.Value, name string) (Value, error) {
 		rv = rv.Elem()
 	}
 	if rv.Kind() == reflect.Struct && !hasCustomMarshaler(rv.Type()) {
-		si := cachedStructInfo(rv.Type())
-		if len(si.fields) == 0 {
+		si := fields.For(rv.Type())
+		if len(si.Fields) == 0 {
 			return Ident(name), nil
 		}
-		if si.tuple {
+		if si.Tuple {
 			vals, err := e.tupleValues(rv, si)
 			if err != nil {
 				return nil, err
@@ -398,7 +400,7 @@ func (e *encoder) encodeMap(rv reflect.Value) (Value, error) {
 		// Sort integers numerically, everything else by its RON text.
 		if ai, ok := a.Key.(Int); ok {
 			if bi, ok := b.Key.(Int); ok {
-				return ai.big().Cmp(bi.big())
+				return ai.Cmp(bi)
 			}
 		}
 		return cmp.Compare(a.sortKey, b.sortKey)
@@ -411,12 +413,12 @@ func (e *encoder) encodeMap(rv reflect.Value) (Value, error) {
 }
 
 func (e *encoder) encodeStruct(rv reflect.Value) (Value, error) {
-	si := cachedStructInfo(rv.Type())
+	si := fields.For(rv.Type())
 	name := ""
 	if e.opts.structNames {
-		name = si.name
+		name = si.Name
 	}
-	if si.tuple {
+	if si.Tuple {
 		vals, err := e.tupleValues(rv, si)
 		if err != nil {
 			return nil, err
@@ -426,7 +428,7 @@ func (e *encoder) encodeStruct(rv reflect.Value) (Value, error) {
 		}
 		return Tuple{Name: name, Values: vals}, nil
 	}
-	if len(si.fields) == 0 {
+	if len(si.Fields) == 0 {
 		if name != "" {
 			return Ident(name), nil
 		}
@@ -439,29 +441,29 @@ func (e *encoder) encodeStruct(rv reflect.Value) (Value, error) {
 	return Struct{Name: name, Fields: fields}, nil
 }
 
-func (e *encoder) structFields(rv reflect.Value, si *structInfo) ([]Field, error) {
-	fields := make([]Field, 0, len(si.fields))
-	for _, f := range si.fields {
-		fv := fieldByIndex(rv, f.index, false)
+func (e *encoder) structFields(rv reflect.Value, si *fields.Info) ([]Field, error) {
+	out := make([]Field, 0, len(si.Fields))
+	for _, f := range si.Fields {
+		fv := fields.ByIndex(rv, f.Index, false)
 		if !fv.IsValid() {
 			continue
 		}
-		if (f.omitEmpty && isEmptyValue(fv)) || (f.omitZero && isZeroValue(fv)) {
+		if (f.OmitEmpty && isEmptyValue(fv)) || (f.OmitZero && isZeroValue(fv)) {
 			continue
 		}
 		v, err := e.encode(fv)
 		if err != nil {
 			return nil, err
 		}
-		fields = append(fields, Field{Name: f.name, Value: v})
+		out = append(out, Field{Name: f.Name, Value: v})
 	}
-	return fields, nil
+	return out, nil
 }
 
-func (e *encoder) tupleValues(rv reflect.Value, si *structInfo) ([]Value, error) {
-	vals := make([]Value, 0, len(si.fields))
-	for _, f := range si.fields {
-		fv := fieldByIndex(rv, f.index, false)
+func (e *encoder) tupleValues(rv reflect.Value, si *fields.Info) ([]Value, error) {
+	vals := make([]Value, 0, len(si.Fields))
+	for _, f := range si.Fields {
+		fv := fields.ByIndex(rv, f.Index, false)
 		if !fv.IsValid() {
 			vals = append(vals, None)
 			continue

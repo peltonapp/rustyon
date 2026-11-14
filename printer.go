@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/peltonapp/rustyon-go/internal/syntax"
 )
 
 // printer renders a Value tree as RON text.
@@ -283,10 +285,10 @@ func isPlainIdent(s string) bool {
 		return false
 	}
 	for i, r := range s {
-		if i == 0 && !isIdentStart(r) {
+		if i == 0 && !syntax.IsIdentStart(r) {
 			return false
 		}
-		if !isIdentContinue(r) {
+		if !syntax.IsIdentContinue(r) {
 			return false
 		}
 	}
@@ -299,7 +301,7 @@ func isRawIdent(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !isRawIdentContinue(r) {
+		if !syntax.IsRawIdentContinue(r) {
 			return false
 		}
 	}
