@@ -137,7 +137,7 @@ Syntax errors point at the problem:
 
 ```text
 $ rustyon validate game.ron
-game.ron:3:16: expected ',' or ')', found integer 600
+game.ron:3:16: expected ',' or ')'
  3 |     size: (800 600),
    |                ^
 ```
