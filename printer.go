@@ -110,8 +110,12 @@ func (p *printer) value(v Value) {
 	case Tuple:
 		if v.Name != "" {
 			p.ident(v.Name)
+		} else if len(v.Values) == 0 {
+			// "()" is the unit value, an empty tuple needs the space.
+			p.sb.WriteString("( )")
+			return
 		}
-		p.seq('(', ')', len(v.Values), !allScalar(v.Values), func(i int) { p.value(v.Values[i]) })
+		p.seq('(', ')', len(v.Values),!allScalar(v.Values), func(i int) { p.value(v.Values[i]) })
 	case Struct:
 		if v.Name != "" {
 			p.ident(v.Name)

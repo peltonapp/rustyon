@@ -54,6 +54,7 @@ type fcoll struct {
 	expanded  bool // printed one element per line
 	breaks    bool // printing produces line breaks
 	closeN    int  // newlines before the closing delimiter
+	spaced    bool // empty collection with whitespace between the delimiters
 	items     []fitem
 	afterOpen []fcomment // comments on the line of the opening delimiter
 	tail      []fcomment // comments after the last item
@@ -388,6 +389,7 @@ func (p *fparser) parseCollBody() (*fcoll, error) {
 	}
 	closeKind, open, closeCh := closeFor(p.tok().kind)
 	n := &fcoll{open: open, close: closeCh}
+	openTok := p.tok()
 	p.i++
 	mark := func(t *ftok) {
 		if t.newlines > 0 {
@@ -406,6 +408,7 @@ func (p *fparser) parseCollBody() (*fcoll, error) {
 		}
 		if p.tok().kind == closeKind {
 			n.tail = lead
+			n.spaced = len(n.items) == 0 && p.tok().off != openTok.off+openTok.n
 			n.closeN = int(p.tok().newlines)
 			mark(p.tok())
 			p.i++
@@ -591,6 +594,10 @@ func (f *formatter) node(nd *fnode) {
 	f.sb.WriteByte(n.open)
 	switch {
 	case len(n.items) == 0 && len(n.tail) == 0 && len(n.afterOpen) == 0:
+		// "()" is the unit value but "( )" is an empty tuple.
+		if n.spaced && n.open == '(' && nd.text == "" {
+			f.sb.WriteByte(' ')
+		}
 	case n.hug:
 		f.node(&n.items[0].value)
 	case !n.expanded:
