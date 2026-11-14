@@ -211,6 +211,9 @@ $RECYCLE.BIN/
 # GoReleaser output
 dist/
 
+# Build output of the ron-rs compatibility oracle
+/compat/ronrs/target/
+
 # Coverage reports
 coverage.txt
 coverage.html

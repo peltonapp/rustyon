@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Arne K. (TRC-Loop)
+# SPDX-License-Identifier: BSD-3-Clause
+
+[package]
+name = "ronrs-oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Reference implementation oracle used to test rustyon against ron-rs"
+
+[dependencies]
+# Pinned on purpose: the compatibility suite checks against one exact ron-rs release.
+ron = { version = "=0.12.3", features = ["indexmap", "integer128"] }
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+
+[profile.release]
+debug = false
