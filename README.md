@@ -5,6 +5,8 @@
 <p align="center">
   <a href="https://pkg.go.dev/github.com/peltonapp/rustyon-go"><img src="https://img.shields.io/badge/go.dev-reference-00ADD8?logo=go&logoColor=white" alt="Go Reference"></a>
   <a href="https://github.com/peltonapp/rustyon-go/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/peltonapp/rustyon-go/ci.yml?branch=main&label=CI&logo=github" alt="CI"></a>
+  <a href="https://codecov.io/gh/peltonapp/rustyon-go"><img src="https://codecov.io/gh/peltonapp/rustyon-go/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/peltonapp/rustyon-go"><img src="https://api.scorecard.dev/projects/github.com/peltonapp/rustyon-go/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://github.com/peltonapp/rustyon-go/releases"><img src="https://img.shields.io/github/v/release/peltonapp/rustyon-go?include_prereleases&sort=semver&color=CE422B" alt="Release"></a>
   <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/peltonapp/rustyon-go?color=00ADD8" alt="Go version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="License: BSD-3-Clause"></a>
@@ -34,8 +36,8 @@ GameConfig(
 - **Dynamic `Value` tree** for documents with an unknown shape, including 128-bit integers.
 - **Formatter that keeps comments**, like `gofmt` for `.ron` files.
 - **Full ron-rs grammar**: raw strings, byte strings, nested block comments, number suffixes, `#![enable(...)]` extensions.
-- **`rustyon` CLI** to format, validate and convert RON to and from JSON.
-- **Zero dependencies**, fuzz tested, Go 1.24+.
+- **`rustyon` CLI** to format, validate, query and convert RON to and from JSON, YAML and TOML.
+- **Zero dependencies** in the library, fuzz tested, Go 1.24+. The CLI is a separate module, so its YAML and TOML libraries never reach your build.
 
 ## Install
 
@@ -122,7 +124,35 @@ rustyon fmt -w config.ron       # format in place, keeps comments
 rustyon validate *.ron          # check syntax
 rustyon to-json save.ron        # RON to JSON
 rustyon from-json data.json     # JSON to RON
+rustyon to-yaml save.ron        # RON to YAML
+rustyon from-yaml cfg.yaml      # YAML to RON
+rustyon to-toml save.ron        # RON to TOML
+rustyon from-toml cfg.toml      # TOML to RON
+rustyon get 'items[0].name' save.ron   # print one value
 ```
+
+Binaries for Linux, macOS, Windows and FreeBSD are attached to the [releases tagged `cmd/rustyon/v*`](https://github.com/peltonapp/rustyon-go/releases). The CLI is its own Go module (`github.com/peltonapp/rustyon-go/cmd/rustyon`) with its own version tags, so the library stays free of dependencies.
+
+Syntax errors point at the problem:
+
+```text
+$ rustyon validate game.ron
+game.ron:3:16: expected ',' or ')', found integer 600
+ 3 |     size: (800 600),
+   |                ^
+```
+
+**Conversions.** `to-*` and `from-*` read a file or standard input and write to standard output. `from-json`, `from-yaml` and `from-toml` take `-structs` to write mappings whose keys are identifiers as structs (`key: value`) instead of maps (`{"key": value}`), and `-indent` to change or disable pretty printing. Like JSON, YAML and TOML cannot hold everything RON can, so struct and variant names are dropped. YAML keeps the field order. TOML has no null and needs a table at the top level: `None` fields are left out, `None` inside an array is an error, and keys are written sorted. Dates and times in TOML become strings.
+
+**`get`.** `rustyon get <path> [file]` prints the RON value at a path and exits with status 1 if it does not exist. A path is built from three steps:
+
+| Step      | Selects                                                                     |
+| --------- | --------------------------------------------------------------------------- |
+| `.name`   | struct field, or map entry with a string or identifier key (leading dot is optional) |
+| `[N]`     | list or tuple element, `-1` is the last; map entry with integer key `N`     |
+| `["key"]` | map entry with a string key (Go escapes), or struct field                   |
+
+Examples: `items[0].name`, `.config.port`, `players["alice"]`, `tags[-1]`. `Some(x)` is looked through, and `.` selects the whole document. Use `-indent ""` for compact output.
 
 ## Performance
 
