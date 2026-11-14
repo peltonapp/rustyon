@@ -91,6 +91,18 @@ type Window struct {
 out, err := rustyon.MarshalWithConfig(v, rustyon.PrettyConfig{CompactArrays: true, DepthLimit: 2})
 ```
 
+### Raw values and generics
+
+`rustyon.Raw` (like `json.RawMessage`) keeps one RON value as text, so a part of a document can be decoded later or passed through. `UnmarshalAs[T]` and `DecodeAs[T]` return the value instead of filling a pointer.
+
+```go
+type Envelope struct {
+    Kind    string
+    Payload rustyon.Raw // captured as written, comments included
+}
+cfg, err := rustyon.UnmarshalAs[Config](data)
+```
+
 ### Enums
 
 Go has no sum types, so a Rust enum becomes an interface and each variant a type that implements it:

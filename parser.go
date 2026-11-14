@@ -1576,6 +1576,7 @@ type header struct {
 	num   number
 	r     rune
 	bytes []byte
+	start int // offset in the source where the value begins
 }
 
 // classifyFloat finishes inf and NaN, which can start a range.
@@ -1617,6 +1618,7 @@ func (p *parser) classify(h *header) error {
 		return p.errEOF()
 	}
 	start := p.cur
+	h.start = start
 	switch p.src[p.cur] {
 	case 't':
 		if p.consumeIdent("true") {

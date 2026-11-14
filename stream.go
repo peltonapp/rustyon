@@ -40,6 +40,7 @@ type typePlan struct {
 	bytes bool // slice whose element is a plain uint8 type
 
 	anyIface bool // an interface without methods
+	raw      bool // Raw, captured by slicing the source
 	temps    sync.Pool
 	elem     atomic.Pointer[typePlan]
 	key      atomic.Pointer[typePlan]
@@ -61,6 +62,7 @@ func planOf(t reflect.Type) *typePlan {
 	k := t.Kind()
 	pl := &typePlan{t: t, kind: k}
 	pl.anyIface = k == reflect.Interface && t.NumMethod() == 0
+	pl.raw = t == rawType
 	pl.tree = t == valueType || fl.value || (k == reflect.Interface && !pl.anyIface) || t == bigIntType
 	if k != reflect.Pointer && (fl.unmarshaler || fl.textUnmarshaler) {
 		pl.tree = true
@@ -245,6 +247,24 @@ func (s *streamer) viaTree(h *header, rv reflect.Value) error {
 }
 
 func (s *streamer) store(h *header, rv reflect.Value, pl *typePlan) error {
+	if pl.raw && s.d.opts.exts == 0 {
+		// Without extensions the text means the same wherever it is read, so
+		// it is kept as written. Otherwise the tree decoder prints the value.
+		if err := s.skip(h); err != nil {
+			return err
+		}
+		end := s.p.cur
+		if h.kind == hIdent {
+			// Reading an identifier also consumes the white space after it
+			// to look for a parenthesis.
+			end = h.start + len(h.s)
+			if strings.HasPrefix(s.p.src[h.start:], "r#") {
+				end += 2
+			}
+		}
+		rv.SetBytes([]byte(s.p.src[h.start:end]))
+		return nil
+	}
 	if pl.tree || h.kind == hRange {
 		return s.viaTree(h, rv)
 	}

@@ -176,6 +176,15 @@ var streamTargets = []struct {
 	{"opts", func() any { return new([]*[]*string) }},
 	{"embedded", func() any { return new(SEmbedded) }},
 	{"unit", func() any { return new(struct{ A struct{} }) }},
+	{"rawval", func() any { return new(Raw) }},
+	{"rawfields", func() any { return new(struct{ A, B Raw }) }},
+	{"rawcont", func() any {
+		return new(struct {
+			L []Raw
+			M map[string]Raw
+			P *Raw
+		})
+	}},
 	{"named", func() any { return new(sNamed) }},
 	{"nameds", func() any { return new([]sNamed) }},
 }
@@ -192,6 +201,19 @@ func sameGo(a, b reflect.Value) bool {
 	}
 	if a.CanInterface() {
 		switch x := a.Interface().(type) {
+		case Raw:
+			// The streaming decoder keeps the source text, the tree decoder
+			// prints the tree: compare what the text means.
+			y := b.Interface().(Raw)
+			if (x == nil) != (y == nil) {
+				return false
+			}
+			vx, errX := Parse(x)
+			vy, errY := Parse(y)
+			if errX != nil || errY != nil {
+				return errX != nil && errY != nil && string(x) == string(y)
+			}
+			return Equal(vx, vy)
 		case Value:
 			return Equal(x, b.Interface().(Value))
 		case big.Int:
@@ -308,6 +330,8 @@ var streamOptionSets = []decodeOptions{
 }
 
 var streamSeeds = []string{
+	`(a: Foo(/* c */ 1, 2), b: [1, Some(2)], l: [x, (y: 1), 1..2], m: {"k": Some(None)}, p: ( ))`,
+	`#![enable(implicit_some)] (a: 5, b: Some 6, l: [None], p: 7)`,
 	`Named(firstOne: 1, second: [(InnerVal: 2), (inner_val: 3)], Tag_X: "t", EM_VAL: 4)`,
 	`(first_one: 1, SECOND: [(innerval: 2)], tag_x: "q", emval: 5, extra: 1)`,
 	`[(firstOne: 1), (FIRST-ONE: 2), (r#first-one: 3), (1, [], "x", 2)]`,

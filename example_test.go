@@ -248,6 +248,39 @@ func ExampleEncoder() {
 	// Output: #![enable(implicit_some)]Window(title:"main",width:640)
 }
 
+func ExampleRaw() {
+	type Envelope struct {
+		Kind    string
+		Payload rustyon.Raw // decoded once Kind is known
+	}
+	var e Envelope
+	err := rustyon.Unmarshal([]byte(`(kind: "point", payload: (x: 3, y: 4 /* kept */))`), &e)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(e.Payload))
+
+	var p struct{ X, Y int }
+	if err := e.Payload.Decode(&p); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(p.X, p.Y)
+
+	out, _ := rustyon.Marshal(e)
+	fmt.Println(string(out))
+	// Output:
+	// (x: 3, y: 4 /* kept */)
+	// 3 4
+	// (kind:"point",payload:(x:3,y:4))
+}
+
+func ExampleUnmarshalAs() {
+	type Config struct{ MaxFPS int }
+	c, err := rustyon.UnmarshalAs[Config]([]byte(`(max_fps: 60)`))
+	fmt.Println(c.MaxFPS, err)
+	// Output: 60 <nil>
+}
+
 func ExampleMarshalWithConfig() {
 	type Level struct {
 		Name   string
