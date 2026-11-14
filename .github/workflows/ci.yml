@@ -105,3 +105,32 @@ jobs:
           go-version: stable
       - name: Fuzz
         run: make fuzz FUZZTIME=30s
+
+  compat:
+    name: ron-rs compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache oracle build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            compat/ronrs/target
+          key: oracle-${{ runner.os }}-${{ hashFiles('compat/ronrs/Cargo.lock') }}
+      - name: Build oracle
+        run: cargo build --release --locked
+        working-directory: compat/ronrs
+      - name: Differential tests
+        run: go test -run 'Compat' -count=1 -v .
+        env:
+          RONRS_ORACLE: ${{ github.workspace }}/compat/ronrs/target/release/ronrs-oracle
+      - name: Differential fuzzing
+        run: go test -run '^$' -fuzz '^FuzzCompat$' -fuzztime 60s .
+        env:
+          RONRS_ORACLE: ${{ github.workspace }}/compat/ronrs/target/release/ronrs-oracle

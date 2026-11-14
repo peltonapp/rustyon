@@ -7,7 +7,7 @@ PKGS     := ./...
 # The CLI is a separate module (cmd/rustyon) so the library has no dependencies.
 CLI      := cmd/rustyon
 
-.PHONY: all test cover lint fmt vet golangci fuzz bench license build playground check clean
+.PHONY: all test cover lint fmt vet golangci fuzz bench compat license build playground check clean
 
 all: check
 
@@ -44,9 +44,18 @@ fuzz:
 bench:
 	$(GO) test -run '^$$' -bench . -benchmem .
 
-# Every Go, YAML and Make file must carry an SPDX license header.
+# Build the ron-rs oracle and run the differential tests against it. The
+# oracle is pinned to one ron-rs release in compat/ronrs/Cargo.toml.
+ORACLE := $(CURDIR)/compat/ronrs/target/release/ronrs-oracle
+
+compat:
+	cd compat/ronrs && cargo build --release --locked
+	RONRS_ORACLE=$(ORACLE) $(GO) test -run 'Compat' -count=1 .
+	RONRS_ORACLE=$(ORACLE) $(GO) test -run '^$$' -fuzz '^FuzzCompat$$' -fuzztime $(FUZZTIME) .
+
+# Every Go, Rust, TOML, YAML and Make file must carry an SPDX license header.
 license:
-	@missing="$$(git ls-files '*.go' '*.yml' '*.yaml' 'Makefile' | while read -r f; do \
+	@missing="$$(git ls-files '*.go' '*.rs' '*.toml' '*.yml' '*.yaml' 'Makefile' | while read -r f; do \
 		head -n 3 "$$f" | grep -q 'SPDX-License-Identifier: BSD-3-Clause' || echo "$$f"; \
 	done)"; \
 	if [ -n "$$missing" ]; then echo "Missing SPDX header:"; echo "$$missing"; exit 1; fi
