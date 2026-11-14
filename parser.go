@@ -514,33 +514,102 @@ func (p *parser) extensionList() (Extensions, error) {
 // skipIdentifier consumes an identifier if there is one. It does not change
 // the position otherwise.
 func (p *parser) skipIdentifier() (string, bool) {
-	rest := p.rest()
-	for _, pre := range []string{`b"`, `b'`, `br#`, `br"`, `r"`, `r#"`, `r##`} {
-		if strings.HasPrefix(rest, pre) {
+	if p.cur >= len(p.src) {
+		return "", false
+	}
+	b := p.src[p.cur]
+	if b == 'b' || b == 'r' {
+		rest := p.rest()
+		for _, pre := range stringPrefixes {
+			if strings.HasPrefix(rest, pre) {
+				return "", false
+			}
+		}
+		if strings.HasPrefix(rest, "r#") {
+			l := p.whileFrom(2, isIdentRaw)
+			if l > 0 {
+				id := rest[2 : 2+l]
+				p.cur += 2 + l
+				return id, true
+			}
 			return "", false
 		}
 	}
-	if strings.HasPrefix(rest, "r#") {
-		l := p.whileFrom(2, isIdentRaw)
-		if l > 0 {
-			id := rest[2 : 2+l]
-			p.cur += 2 + l
-			return id, true
+	if b < utf8.RuneSelf {
+		if !isASCIIIdentStart(b) {
+			return "", false
 		}
-		return "", false
+		end := p.xidEnd(p.cur + 1)
+		id := p.src[p.cur:end]
+		p.cur = end
+		return id, true
 	}
 	if c := p.peekRune(); c >= 0 && isIdentFirst(c) {
 		n := utf8.RuneLen(c)
-		l := n + p.whileFrom(n, syntax.IsXIDContinue)
-		id := rest[:l]
-		p.cur += l
+		end := p.xidEnd(p.cur + n)
+		id := p.src[p.cur:end]
+		p.cur = end
 		return id, true
 	}
 	return "", false
 }
 
+// stringPrefixes are the openings of string and byte string literals that
+// stop an identifier from starting with b or r.
+var stringPrefixes = [...]string{`b"`, `b'`, `br#`, `br"`, `r"`, `r#"`, `r##`}
+
+func isASCIIIdentStart(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// xidEnd returns the absolute offset where the run of XID_Continue
+// characters that starts at the absolute offset i ends.
+func (p *parser) xidEnd(i int) int {
+	src := p.src
+	for i < len(src) {
+		c := src[i]
+		if c < utf8.RuneSelf {
+			if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+				i++
+				continue
+			}
+			return i
+		}
+		r, n := utf8.DecodeRuneInString(src[i:])
+		if !syntax.IsXIDContinue(r) {
+			return i
+		}
+		i += n
+	}
+	return i
+}
+
+// hasRawOrStringPrefix reports whether the input starts with a string
+// literal prefix or with r#.
+func (p *parser) hasRawOrStringPrefix() bool {
+	rest := p.rest()
+	for _, pre := range stringPrefixes {
+		if strings.HasPrefix(rest, pre) {
+			return true
+		}
+	}
+	return strings.HasPrefix(rest, "r#")
+}
+
 // identifier parses a strict identifier such as a struct field name.
 func (p *parser) identifier() (string, error) {
+	// Fast path: a plain ASCII identifier that is neither a string prefix nor
+	// followed by a character that makes it a raw-only identifier.
+	if p.cur < len(p.src) {
+		if b := p.src[p.cur]; isASCIIIdentStart(b) && ((b != 'b' && b != 'r') || !p.hasRawOrStringPrefix()) {
+			end := p.xidEnd(p.cur + 1)
+			if end >= len(p.src) || (p.src[end] != '.' && p.src[end] != '+' && p.src[end] != '-') {
+				id := p.src[p.cur:end]
+				p.cur = end
+				return id, nil
+			}
+		}
+	}
 	first, err := p.peekRuneOrEOF()
 	if err != nil {
 		return "", err
@@ -859,12 +928,79 @@ func (p *parser) nextBytesIsFloat() bool {
 	return valid > p.whileFrom(skip, isIntChar)
 }
 
+// fastNumber recognizes the overwhelmingly common plain decimal integers
+// and simple floats (digits with an optional fraction) that are followed by a
+// delimiter. It reports false for everything else, leaving the position
+// unchanged, so that the general path handles all other spellings and
+// reports all errors.
+func (p *parser) fastNumber() (number, bool) {
+	src := p.src
+	i := p.cur
+	neg := false
+	if i < len(src) && (src[i] == '-' || src[i] == '+') {
+		neg = src[i] == '-'
+		i++
+	}
+	d0 := i
+	var v uint64
+	for i < len(src) && src[i] >= '0' && src[i] <= '9' {
+		v = v*10 + uint64(src[i]-'0')
+		i++
+		if i-d0 > 18 {
+			return number{}, false
+		}
+	}
+	if i == d0 {
+		return number{}, false
+	}
+	if i < len(src) && src[i] == '.' {
+		j := i + 1
+		for j < len(src) && src[j] >= '0' && src[j] <= '9' {
+			j++
+		}
+		if j == i+1 || !isNumberDelimiter(src, j) {
+			return number{}, false
+		}
+		f, err := strconv.ParseFloat(src[p.cur:j], 64)
+		if err != nil {
+			return number{}, false
+		}
+		p.cur = j
+		return number{isFloat: true, f: f}, true
+	}
+	if !isNumberDelimiter(src, i) {
+		return number{}, false
+	}
+	p.cur = i
+	return number{neg: neg, mag: u128{0, v}}, true
+}
+
+func isNumberDelimiter(src string, i int) bool {
+	if i >= len(src) {
+		return true
+	}
+	switch src[i] {
+	case ',', ')', ']', '}', ':', ' ', '\n', '\t', '\r':
+		return true
+	}
+	return false
+}
+
 func (p *parser) anyNumber() (number, error) {
-	switch {
-	case p.consumeIdent("inf"), p.consumeIdent("inff32"), p.consumeIdent("inff64"):
-		return number{isFloat: true, f: math.Inf(1)}, nil
-	case p.consumeIdent("NaN"), p.consumeIdent("NaNf32"), p.consumeIdent("NaNf64"):
-		return number{isFloat: true, f: math.NaN()}, nil
+	if p.cur < len(p.src) {
+		switch p.src[p.cur] {
+		case 'i', 'N':
+			switch {
+			case p.consumeIdent("inf"), p.consumeIdent("inff32"), p.consumeIdent("inff64"):
+				return number{isFloat: true, f: math.Inf(1)}, nil
+			case p.consumeIdent("NaN"), p.consumeIdent("NaNf32"), p.consumeIdent("NaNf64"):
+				return number{isFloat: true, f: math.NaN()}, nil
+			}
+		default:
+			if n, ok := p.fastNumber(); ok {
+				return n, nil
+			}
+		}
 	}
 	if p.nextBytesIsFloat() {
 		return p.float()
@@ -896,8 +1032,9 @@ func parseFloatStr(s string, bitSize int) (float64, bool) {
 	return f, true
 }
 
-func (p *parser) float() (number, error) {
-	lits := []struct {
+// floatLiteral parses inf and NaN with an optional sign and f32 or f64 suffix.
+func (p *parser) floatLiteral() (number, bool) {
+	lits := [...]struct {
 		s string
 		v float64
 	}{
@@ -906,7 +1043,7 @@ func (p *parser) float() (number, error) {
 	}
 	for _, l := range lits {
 		if p.consumeIdent(l.s) {
-			return number{isFloat: true, f: l.v}, nil
+			return number{isFloat: true, f: l.v}, true
 		}
 		if strings.HasPrefix(p.rest(), l.s) {
 			after := p.rest()[len(l.s):]
@@ -915,9 +1052,27 @@ func (p *parser) float() (number, error) {
 					r, _ := utf8.DecodeRuneInString(post)
 					if post == "" || !syntax.IsXIDContinue(r) {
 						p.cur += len(l.s) + len(suf)
-						return number{isFloat: true, f: l.v}, nil
+						return number{isFloat: true, f: l.v}, true
 					}
 				}
+			}
+		}
+	}
+	return number{}, false
+}
+
+func (p *parser) float() (number, error) {
+	if p.cur < len(p.src) {
+		c := p.src[p.cur]
+		if c == '+' || c == '-' {
+			c = 0
+			if p.cur+1 < len(p.src) {
+				c = p.src[p.cur+1]
+			}
+		}
+		if c == 'i' || c == 'N' {
+			if n, ok := p.floatLiteral(); ok {
+				return n, nil
 			}
 		}
 	}
@@ -933,24 +1088,27 @@ func (p *parser) float() (number, error) {
 	if p.checkChar('_') {
 		return number{}, p.fail(errUnderscore, "unexpected leading underscore in a number")
 	}
-	var sb strings.Builder
-	allowUnderscore := false
-	for i := 0; i < numBytes; i++ {
-		c := src[i]
-		switch {
-		case c == '_' && allowUnderscore:
-			continue
-		case c == '_':
-			p.cur += i
-			return number{}, p.fail(errOther, "unexpected underscore in float")
-		case (c >= '0' && c <= '9') || c == 'e' || c == 'E':
-			allowUnderscore = true
-		case c == '.':
-			allowUnderscore = false
+	f := src[:numBytes]
+	if strings.IndexByte(f, '_') >= 0 {
+		var sb strings.Builder
+		allowUnderscore := false
+		for i := 0; i < numBytes; i++ {
+			c := src[i]
+			switch {
+			case c == '_' && allowUnderscore:
+				continue
+			case c == '_':
+				p.cur += i
+				return number{}, p.fail(errOther, "unexpected underscore in float")
+			case (c >= '0' && c <= '9') || c == 'e' || c == 'E':
+				allowUnderscore = true
+			case c == '.':
+				allowUnderscore = false
+			}
+			sb.WriteByte(c)
 		}
-		sb.WriteByte(c)
+		f = sb.String()
 	}
-	f := sb.String()
 	if p.runeAt(p.cur+numBytes) == 'f' {
 		backup := p.cur
 		p.cur += numBytes
@@ -1155,9 +1313,20 @@ func (p *parser) rawBytes() (string, error) {
 	return s, nil
 }
 
+// parseStringLit parses a string literal. The result may be a substring of
+// the source, so callers that keep it beyond the parse must copy it.
 func (p *parser) parseStringLit() (string, error) {
 	switch {
 	case p.consumeChar('"'):
+		rest := p.rest()
+		j := strings.IndexByte(rest, '"')
+		if j < 0 {
+			return "", p.fail(errOther, "unterminated string")
+		}
+		if strings.IndexByte(rest[:j], '\\') < 0 {
+			p.cur += j + 1
+			return rest[:j], nil
+		}
 		b, err := p.escapedBytes(false)
 		return string(b), err
 	case p.consumeChar('r'):
@@ -1375,98 +1544,262 @@ func (p *parser) floatRangeOrValue(start number) (Value, error) {
 	return start.value(), nil
 }
 
-// parseValue parses any value. It mirrors deserialize_any of ron-rs.
-func (p *parser) parseValue() (Value, error) {
+// hkind is the kind of value found by classify.
+type hkind uint8
+
+const (
+	hBool hkind = iota
+	hNone
+	hSome   // "Some" consumed, the payload follows
+	hUnit   // ()
+	hNum    // an integer or float, in header.num
+	hRange  // a range such as 1..5, the position is back at the start
+	hIdent  // a bare identifier, in header.s
+	hStruct // a struct, positioned at the opening parenthesis
+	hTuple  // a tuple, positioned at the opening parenthesis
+	hList   // positioned at [
+	hMap    // positioned at {
+	hBytes  // a byte string, in header.bytes
+	hString // a string, in header.s
+	hChar   // a char, in header.r
+)
+
+// header describes the value at the current position. classify consumes the
+// parts of a value that decide what it is and leaves collections open, so
+// that the same scanning drives both the tree builder and the streaming
+// decoder.
+type header struct {
+	kind  hkind
+	b     bool   // hBool
+	old   bool   // hStruct, hTuple: no parentheses, opened by an enclosing Some(
+	s     string // hIdent, hString: the text; hStruct, hTuple: the name
+	num   number
+	r     rune
+	bytes []byte
+}
+
+// classifyFloat finishes inf and NaN, which can start a range.
+func (p *parser) classifyFloat(h *header, start int, f float64) {
+	if p.checkStr("..") {
+		p.cur = start
+		h.kind = hRange
+		return
+	}
+	h.kind = hNum
+	h.num = number{isFloat: true, f: f}
+}
+
+// classify mirrors deserialize_any of ron-rs. It parses scalars completely
+// and stops after the head of collections.
+func (p *parser) classify(h *header) error {
 	if p.newtypeVariant {
 		if p.checkChar(')') {
 			p.newtypeVariant = false
-			return Unit{}, nil
+			h.kind = hUnit
+			return nil
 		}
 		st, err := p.checkStructType(false, true)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		switch st {
 		case stNamed:
-			return p.handleStructAfterName("")
+			h.kind, h.old, h.s = hStruct, true, ""
+			return nil
 		case stEmptyTuple, stNonNewtypeTuple:
-			return p.parseTuple("")
+			h.kind, h.old, h.s = hTuple, true, ""
+			return nil
 		default:
 			p.newtypeVariant = false
 		}
 	}
+	if p.cur >= len(p.src) {
+		return p.errEOF()
+	}
+	start := p.cur
+	switch p.src[p.cur] {
+	case 't':
+		if p.consumeIdent("true") {
+			h.kind, h.b = hBool, true
+			return nil
+		}
+	case 'f':
+		if p.consumeIdent("false") {
+			h.kind, h.b = hBool, false
+			return nil
+		}
+	case 'S':
+		if p.checkIdent("Some") {
+			p.cur += len("Some")
+			h.kind = hSome
+			return nil
+		}
+	case 'N':
+		if p.consumeIdent("None") {
+			h.kind = hNone
+			return nil
+		}
+		if p.consumeIdent("NaN") || p.consumeIdent("NaNf32") || p.consumeIdent("NaNf64") {
+			p.classifyFloat(h, start, math.NaN())
+			return nil
+		}
+	case 'i':
+		if p.consumeIdent("inf") || p.consumeIdent("inff32") || p.consumeIdent("inff64") {
+			p.classifyFloat(h, start, math.Inf(1))
+			return nil
+		}
+	case '(':
+		if p.consumeStr("()") {
+			h.kind = hUnit
+			return nil
+		}
+	}
+	if name, ok := p.skipIdentifier(); ok {
+		if err := p.skipWS(); err != nil {
+			return err
+		}
+		return p.classifyStruct(h, name, true)
+	}
+	c := rune(p.src[p.cur])
+	if c >= utf8.RuneSelf {
+		c = p.peekRune()
+	}
 	switch {
-	case p.consumeIdent("true"):
-		return Bool(true), nil
-	case p.consumeIdent("false"):
-		return Bool(false), nil
-	case p.checkIdent("Some"):
-		return p.parseOption()
-	case p.consumeIdent("None"):
-		return None, nil
-	case p.consumeStr("()"):
-		return Unit{}, nil
+	case c == '(':
+		return p.classifyStruct(h, "", false)
+	case c == '[':
+		h.kind = hList
+	case c == '{':
+		h.kind = hMap
+	case (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.' || c == 'b':
+		if c == 'b' && !p.checkStr("b'") {
+			b, err := p.parseByteStringNoBase64()
+			h.kind, h.bytes = hBytes, b
+			return err
+		}
+		if p.checkStr("..") {
+			h.kind = hRange
+			return nil
+		}
+		n, err := p.anyNumber()
+		if err != nil {
+			return err
+		}
+		if p.checkStr("..") {
+			p.cur = start
+			h.kind = hRange
+			return nil
+		}
+		h.kind, h.num = hNum, n
+	case c == '"' || c == 'r':
+		s, err := p.parseStringLit()
+		h.kind, h.s = hString, s
+		return err
+	case c == '\'':
+		r, err := p.parseChar()
+		h.kind, h.r = hChar, r
+		return err
+	default:
+		return p.fail(errOther, "unexpected character "+strconv.QuoteRune(c))
+	}
+	return nil
+}
+
+// classifyStruct decides between a bare identifier, a struct and a tuple
+// after an optional name.
+func (p *parser) classifyStruct(h *header, name string, hasName bool) error {
+	st, err := p.checkStructType(true, false)
+	if err != nil {
+		return err
+	}
+	h.s, h.old = name, false
+	switch st {
+	case stUnit:
+		if hasName {
+			h.kind = hIdent
+		} else {
+			h.kind, h.s = hUnit, ""
+		}
+	case stNamed:
+		h.kind = hStruct
+	default:
+		h.kind = hTuple
+	}
+	return nil
+}
+
+// rangeValue builds the map ron-rs deserializes a range into. The position
+// is at the start of the range.
+func (p *parser) rangeValue() (Value, error) {
+	switch {
 	case p.consumeIdent("inf"), p.consumeIdent("inff32"), p.consumeIdent("inff64"):
 		return p.floatRangeOrValue(number{isFloat: true, f: math.Inf(1)})
 	case p.consumeIdent("NaN"), p.consumeIdent("NaNf32"), p.consumeIdent("NaNf64"):
 		return p.floatRangeOrValue(number{isFloat: true, f: math.NaN()})
 	}
-	if name, ok := p.skipIdentifier(); ok {
-		if err := p.skipWS(); err != nil {
+	if p.consumeStr("..=") {
+		end, err := p.anyNumber()
+		if err != nil {
 			return nil, err
 		}
-		return p.handleAnyStruct(name, true)
+		return Map{{String("end"), end.value()}}, nil
 	}
-	c, err := p.peekRuneOrEOF()
-	if err != nil {
-		return nil, err
-	}
-	switch {
-	case c == '(':
-		return p.handleAnyStruct("", false)
-	case c == '[':
-		return p.parseList()
-	case c == '{':
-		return p.parseMap()
-	case (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.' || c == 'b':
-		if c == 'b' && !p.checkStr("b'") {
-			b, err := p.parseByteStringNoBase64()
-			return Bytes(b), err
-		}
-		if p.consumeStr("..=") {
+	if p.consumeStr("..") {
+		if p.checkAnyNumberStart() {
 			end, err := p.anyNumber()
 			if err != nil {
 				return nil, err
 			}
 			return Map{{String("end"), end.value()}}, nil
 		}
-		if p.consumeStr("..") {
-			if p.checkAnyNumberStart() {
-				end, err := p.anyNumber()
-				if err != nil {
-					return nil, err
-				}
-				return Map{{String("end"), end.value()}}, nil
-			}
-			return Unit{}, nil
-		}
-		start, err := p.anyNumber()
-		if err != nil {
-			return nil, err
-		}
-		return p.floatRangeOrValue(start)
-	case c == '"' || c == 'r':
-		s, err := p.parseStringLit()
-		return String(s), err
-	case c == '\'':
-		r, err := p.parseChar()
-		return Char(r), err
+		return Unit{}, nil
 	}
-	return nil, p.fail(errOther, "unexpected character "+strconv.QuoteRune(c))
+	start, err := p.anyNumber()
+	if err != nil {
+		return nil, err
+	}
+	return p.floatRangeOrValue(start)
 }
 
+// parseValue parses any value into the dynamic tree.
+func (p *parser) parseValue() (Value, error) {
+	var h header
+	if err := p.classify(&h); err != nil {
+		return nil, err
+	}
+	switch h.kind {
+	case hBool:
+		return Bool(h.b), nil
+	case hNone:
+		return None, nil
+	case hSome:
+		return p.parseOption()
+	case hUnit:
+		return Unit{}, nil
+	case hNum:
+		return h.num.value(), nil
+	case hRange:
+		return p.rangeValue()
+	case hIdent:
+		return Ident(h.s), nil
+	case hStruct:
+		return p.parseStruct(&h)
+	case hTuple:
+		return p.parseTuple(&h)
+	case hList:
+		return p.parseList()
+	case hMap:
+		return p.parseMap()
+	case hBytes:
+		return Bytes(h.bytes), nil
+	case hString:
+		return String(strings.Clone(h.s)), nil
+	}
+	return Char(h.r), nil
+}
+
+// parseOption parses the payload of Some after the Some keyword.
 func (p *parser) parseOption() (Value, error) {
-	p.consumeIdent("Some")
 	if err := p.skipWS(); err != nil {
 		return nil, err
 	}
@@ -1498,23 +1831,6 @@ func (p *parser) parseOption() (Value, error) {
 	return nil, p.fail(errOther, "expected '(' after Some")
 }
 
-func (p *parser) handleAnyStruct(name string, hasName bool) (Value, error) {
-	st, err := p.checkStructType(true, false)
-	if err != nil {
-		return nil, err
-	}
-	switch st {
-	case stUnit:
-		if hasName {
-			return Ident(name), nil
-		}
-		return Unit{}, nil
-	case stNamed:
-		return p.handleStructAfterName(name)
-	}
-	return p.parseTuple(name)
-}
-
 // hasElement reports whether another element follows in a comma separated
 // collection that ends with the byte term.
 func (p *parser) hasElement(hadComma bool, term byte) (bool, error) {
@@ -1531,16 +1847,16 @@ func (p *parser) hasElement(hadComma bool, term byte) (bool, error) {
 	return false, p.fail(errOther, "expected ',' or '"+string(term)+"'")
 }
 
-func (p *parser) handleStructAfterName(name string) (Value, error) {
-	if !p.newtypeVariant && !p.consumeChar('(') {
+func (p *parser) parseStruct(h *header) (Value, error) {
+	if !h.old && !p.consumeChar('(') {
 		return nil, p.fail(errOther, "expected struct")
 	}
-	old := p.newtypeVariant
+	old := h.old
 	p.newtypeVariant = false
 	if err := p.enter(); err != nil {
 		return nil, err
 	}
-	s := Struct{Name: name}
+	s := Struct{Name: h.s}
 	hadComma := true
 	for {
 		ok, err := p.hasElement(hadComma, ')')
@@ -1585,16 +1901,16 @@ func (p *parser) handleStructAfterName(name string) (Value, error) {
 	return nil, p.fail(errOther, "expected ')' to end struct")
 }
 
-func (p *parser) parseTuple(name string) (Value, error) {
-	if !p.newtypeVariant && !p.consumeChar('(') {
+func (p *parser) parseTuple(h *header) (Value, error) {
+	if !h.old && !p.consumeChar('(') {
 		return nil, p.fail(errOther, "expected tuple")
 	}
-	old := p.newtypeVariant
+	old := h.old
 	p.newtypeVariant = false
 	if err := p.enter(); err != nil {
 		return nil, err
 	}
-	t := Tuple{Name: name}
+	t := Tuple{Name: h.s}
 	hadComma := true
 	for {
 		ok, err := p.hasElement(hadComma, ')')
