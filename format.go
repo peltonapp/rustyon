@@ -26,6 +26,9 @@ func Format(src []byte) ([]byte, error) {
 
 // FormatIndent is like [Format] but uses indent for each nesting level.
 func FormatIndent(src []byte, indent string) ([]byte, error) {
+	if _, err := ParseDocument(src); err != nil {
+		return nil, err
+	}
 	out, err := syntax.Format(src, indent)
 	if err != nil {
 		return nil, syntaxError(err)

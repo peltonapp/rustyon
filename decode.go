@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"github.com/peltonapp/rustyon-go/internal/fields"
-	"github.com/peltonapp/rustyon-go/internal/syntax"
 )
 
 // Unmarshaler is implemented by types that can unmarshal a RON value
@@ -112,7 +111,10 @@ func (dec *Decoder) More() bool {
 	if err := dec.init(); err != nil {
 		return true // let Decode report the error
 	}
-	return dec.p.tok.Kind != syntax.EOF
+	if err := dec.p.skipWS(); err != nil {
+		return true
+	}
+	return dec.p.cur < len(dec.p.src)
 }
 
 func (dec *Decoder) init() error {
@@ -129,14 +131,12 @@ func (dec *Decoder) init() error {
 	if dec.err != nil {
 		return dec.err
 	}
-	for dec.p.tok.Kind == syntax.Hash {
-		exts, err := dec.p.parseAttribute()
-		if err != nil {
-			dec.err = err
-			return err
-		}
-		dec.opts.exts |= exts
+	exts, err := dec.p.parseAttributes()
+	if err != nil {
+		dec.err = dec.p.wrap(err)
+		return dec.err
 	}
+	dec.opts.exts |= exts
 	return nil
 }
 
@@ -146,13 +146,17 @@ func (dec *Decoder) Decode(v any) error {
 	if err := dec.init(); err != nil {
 		return err
 	}
-	if dec.p.tok.Kind == syntax.EOF {
+	if err := dec.p.skipWS(); err != nil {
+		dec.err = dec.p.wrap(err)
+		return dec.err
+	}
+	if dec.p.cur >= len(dec.p.src) {
 		return io.EOF
 	}
 	val, err := dec.p.parseValue()
 	if err != nil {
-		dec.err = err
-		return err
+		dec.err = dec.p.wrap(err)
+		return dec.err
 	}
 	return decodeInto(val, v, &dec.opts)
 }
