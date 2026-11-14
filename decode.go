@@ -47,12 +47,19 @@ var (
 // chars, []byte, []any for lists and tuples, map[any]any for maps,
 // map[string]any for structs and string for identifiers. Decode into a
 // [Value] to keep the full structure including names.
+//
+// Unmarshal decodes straight from the text into v without building a [Value]
+// tree, except for the parts of the input that go into an empty interface, a
+// Value, an enum registered with the registry or a type with an
+// [Unmarshaler] or [encoding.TextUnmarshaler] method. If decoding fails, v
+// may be partially modified.
 func Unmarshal(data []byte, v any) error {
-	doc, err := ParseDocument(data)
-	if err != nil {
-		return err
+	if err := unmarshalStream(data, v, &decodeOptions{}); err == nil {
+		return nil
 	}
-	return decodeInto(doc.Value, v, &decodeOptions{exts: doc.Extensions})
+	// The streaming decoder only reports that it failed. The tree decoder
+	// finds the precise error.
+	return unmarshalTree(data, v, &decodeOptions{})
 }
 
 // FromValue stores a parsed [Value] in the Go value pointed to by target,
@@ -153,12 +160,7 @@ func (dec *Decoder) Decode(v any) error {
 	if dec.p.cur >= len(dec.p.src) {
 		return io.EOF
 	}
-	val, err := dec.p.parseValue()
-	if err != nil {
-		dec.err = dec.p.wrap(err)
-		return dec.err
-	}
-	return decodeInto(val, v, &dec.opts)
+	return dec.decodeNext(v)
 }
 
 type decoder struct {
@@ -656,6 +658,9 @@ func (d *decoder) decodeMap(v Value, rv reflect.Value) error {
 		d.pop()
 		if err != nil {
 			return err
+		}
+		if !k.Comparable() {
+			return d.typeError(e.Key, t, "map key is not comparable in Go")
 		}
 		ev := reflect.New(t.Elem()).Elem()
 		d.pushKey(e.Key)

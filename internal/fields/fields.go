@@ -36,14 +36,20 @@ func (si *Info) IsNewtype() bool { return si.Tuple && len(si.Fields) == 1 }
 
 // Lookup finds a field by exact name, then case-insensitively.
 func (si *Info) Lookup(name string) (*Field, bool) {
-	idx, ok := si.byName[name]
-	if !ok {
-		idx, ok = si.byFold[strings.ToLower(name)]
-	}
+	idx, ok := si.LookupIndex(name)
 	if !ok {
 		return nil, false
 	}
 	return &si.Fields[idx], true
+}
+
+// LookupIndex is like Lookup but returns the index into Fields.
+func (si *Info) LookupIndex(name string) (int, bool) {
+	idx, ok := si.byName[name]
+	if !ok {
+		idx, ok = si.byFold[strings.ToLower(name)]
+	}
+	return idx, ok
 }
 
 var cache sync.Map // reflect.Type to *Info
