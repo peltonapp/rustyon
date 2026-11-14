@@ -123,6 +123,10 @@ rustyon to-json save.ron        # RON to JSON
 rustyon from-json data.json     # JSON to RON
 ```
 
+## Performance
+
+Everything is linear in the input size. Parsing into a dynamic tree runs within 20 percent of `encoding/json`; typed `Marshal` and `Unmarshal` are about 2.3x and 3x slower than `encoding/json`. A 13 KB file encodes in about 0.13 ms and decodes in about 0.3 ms on an Apple M2. Charts, Big O tables and methodology are on the [Performance](https://github.com/peltonapp/rustyon-go/wiki/Performance) wiki page.
+
 ## Documentation
 
 - [Wiki](https://github.com/peltonapp/rustyon-go/wiki): guides, type mapping, enums, formatter rules, performance
