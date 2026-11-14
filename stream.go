@@ -40,6 +40,7 @@ type typePlan struct {
 	bytes bool // slice whose element is a plain uint8 type
 
 	anyIface bool // an interface without methods
+	temps    sync.Pool
 	elem     atomic.Pointer[typePlan]
 	key      atomic.Pointer[typePlan]
 	st       atomic.Pointer[structPlan]
@@ -799,7 +800,12 @@ func (s *streamer) storeSlice(h *header, rv reflect.Value, pl *typePlan) error {
 		}
 		n := rv.Len()
 		if n == rv.Cap() {
-			rv.Grow(1)
+			if n == 0 {
+				// Small lists are common: avoid the first few doublings.
+				rv.Grow(4)
+			} else {
+				rv.Grow(1)
+			}
 		}
 		rv.SetLen(n + 1)
 		if err := s.guardedValue(rv.Index(n), ep); err != nil {
@@ -885,8 +891,14 @@ func (s *streamer) storeMap(h *header, rv reflect.Value, pl *typePlan) error {
 	}
 	kp, ep := pl.keyPlan(), pl.elemPlan()
 	plainKey := kp.kind == reflect.String && !kp.tree && !s.regActive
-	k := reflect.New(t.Key()).Elem()
-	ev := reflect.New(t.Elem()).Elem()
+	maybeIncomparable := kp.kind == reflect.Interface || kp.kind == reflect.Struct || kp.kind == reflect.Array
+	var tmp *mapTemps
+	if x := pl.temps.Get(); x != nil {
+		tmp = x.(*mapTemps)
+	} else {
+		tmp = &mapTemps{k: reflect.New(t.Key()).Elem(), ev: reflect.New(t.Elem()).Elem()}
+	}
+	k, ev := tmp.k, tmp.ev
 	for {
 		ok, err := s.next(&sq)
 		if err != nil {
@@ -914,7 +926,7 @@ func (s *streamer) storeMap(h *header, rv reflect.Value, pl *typePlan) error {
 				return err
 			}
 		}
-		if !k.Comparable() {
+		if maybeIncomparable && !k.Comparable() {
 			return errStream
 		}
 		ev.SetZero()
@@ -926,8 +938,18 @@ func (s *streamer) storeMap(h *header, rv reflect.Value, pl *typePlan) error {
 			return err
 		}
 	}
-	return s.close(&sq)
+	if err := s.close(&sq); err != nil {
+		return err
+	}
+	k.SetZero()
+	ev.SetZero()
+	pl.temps.Put(tmp)
+	return nil
 }
+
+// mapTemps are the scratch key and element values used while decoding a map.
+// SetMapIndex copies them, so they can be reused for every entry.
+type mapTemps struct{ k, ev reflect.Value }
 
 func (s *streamer) storeStruct(h *header, rv reflect.Value, pl *typePlan) error {
 	if s.d.opts.exts&ExplicitStructNames != 0 {

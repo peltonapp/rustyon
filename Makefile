@@ -36,7 +36,7 @@ golangci:
 lint: fmt vet golangci
 
 fuzz:
-	@for target in FuzzParse FuzzFormat FuzzUnmarshal; do \
+	@for target in FuzzParse FuzzFormat FuzzUnmarshal FuzzStream; do \
 		echo "== $$target"; \
 		$(GO) test -run '^$$' -fuzz "^$$target$$" -fuzztime $(FUZZTIME) . || exit 1; \
 	done
