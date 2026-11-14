@@ -928,12 +928,12 @@ func (p *parser) nextBytesIsFloat() bool {
 	return valid > p.whileFrom(skip, isIntChar)
 }
 
-// fastNumber recognizes the overwhelmingly common plain decimal integers
+// scanNumber recognizes the overwhelmingly common plain decimal integers
 // and simple floats (digits with an optional fraction) that are followed by a
 // delimiter. It reports false for everything else, leaving the position
 // unchanged, so that the general path handles all other spellings and
 // reports all errors.
-func (p *parser) fastNumber() (number, bool) {
+func (p *parser) scanNumber() (number, bool) {
 	src := p.src
 	i := p.cur
 	neg := false
@@ -997,7 +997,7 @@ func (p *parser) anyNumber() (number, error) {
 				return number{isFloat: true, f: math.NaN()}, nil
 			}
 		default:
-			if n, ok := p.fastNumber(); ok {
+			if n, ok := p.scanNumber(); ok {
 				return n, nil
 			}
 		}

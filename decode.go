@@ -221,7 +221,7 @@ func (d *decoder) hook(err error) error {
 	return err
 }
 
-func (d *decoder) push(e pathElem)      { d.path = append(d.path, e) }
+func (d *decoder) push(e pathElem)       { d.path = append(d.path, e) }
 func (d *decoder) pushField(name string) { d.push(pathElem{kind: pathField, name: name}) }
 func (d *decoder) pushIndex(i int)       { d.push(pathElem{kind: pathIndex, index: i}) }
 func (d *decoder) pushKey(k Value)       { d.push(pathElem{kind: pathKey, key: k}) }
