@@ -9,6 +9,7 @@
   <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/peltonapp/rustyon-go?color=00ADD8" alt="Go version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="License: BSD-3-Clause"></a>
   <a href="https://github.com/peltonapp/rustyon-go/wiki"><img src="https://img.shields.io/badge/docs-wiki-CE422B" alt="Docs"></a>
+  <a href="https://peltonapp.github.io/rustyon-go/"><img src="https://img.shields.io/badge/playground-try%20it-00ADD8" alt="Playground"></a>
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="Zero dependencies">
 </p>
 

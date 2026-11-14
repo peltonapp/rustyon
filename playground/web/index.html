@@ -1,0 +1,275 @@
+<!doctype html>
+<!--
+SPDX-FileCopyrightText: 2026 Arne K. (TRC-Loop)
+SPDX-License-Identifier: BSD-3-Clause
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rustyon playground</title>
+<meta name="description" content="Format, validate and convert RON in your browser with rustyon compiled to WebAssembly.">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fafaf8;
+  --panel: #ffffff;
+  --text: #1d1f21;
+  --muted: #666b72;
+  --border: #d9d9d4;
+  --rust: #ce422b;
+  --blue: #007fa3;
+  --err-bg: #fdecea;
+  --err-text: #9b2615;
+  --ok-text: #1a7f45;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --panel: #1b1e23;
+    --text: #e6e6e3;
+    --muted: #9aa0a8;
+    --border: #2f343b;
+    --rust: #e8613f;
+    --blue: #3cc4ea;
+    --err-bg: #3a1c18;
+    --err-text: #ff9a8a;
+    --ok-text: #5fd48c;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 var(--sans);
+}
+main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 40px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.logo { width: 200px; max-width: 60%; height: auto; display: block; }
+.links { display: flex; gap: 16px; font-size: 14px; }
+a { color: var(--blue); }
+p.lead { color: var(--muted); margin: 12px 0 20px; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; margin-bottom: 16px; }
+.modes { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.modes button {
+  font: inherit; font-size: 14px; color: var(--text); background: transparent;
+  border: 0; border-right: 1px solid var(--border); padding: 8px 14px; cursor: pointer;
+}
+.modes button:last-child { border-right: 0; }
+.modes button[aria-pressed="true"] { background: var(--rust); color: #fff; }
+.modes button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+label.opt { font-size: 14px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+select {
+  font: inherit; font-size: 14px; color: var(--text); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+}
+.panes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .panes { grid-template-columns: 1fr; } }
+.pane { display: flex; flex-direction: column; min-width: 0; }
+.pane h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 6px; }
+textarea, pre#output {
+  font: 14px/1.5 var(--mono);
+  width: 100%; min-height: 360px; margin: 0; padding: 12px;
+  color: var(--text); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px;
+  tab-size: 4;
+}
+textarea { resize: vertical; white-space: pre; overflow: auto; }
+pre#output { overflow: auto; white-space: pre; flex: 1; }
+#status { margin-top: 16px; min-height: 24px; font-size: 14px; }
+#status.error { background: var(--err-bg); color: var(--err-text); border-radius: 8px; padding: 10px 12px; font-family: var(--mono); }
+#status.ok { color: var(--ok-text); }
+#status.info { color: var(--muted); }
+#status button { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
+footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <a href="https://github.com/peltonapp/rustyon-go" aria-label="rustyon on GitHub">
+<svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 255" role="img">
+  <title>rustyon logo</title>
+  <defs>
+    <linearGradient id="colon-split" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="255">
+      <stop offset="0.537" stop-color="#00ADD8"/>
+      <stop offset="0.537" stop-color="#CE422B"/>
+    </linearGradient>
+  </defs>
+  <path fill="#CE422B" d="M172.75 196Q150.98 191.09 139.03 175.75Q127.07 160.42 127.07 137.45V110.5Q127.07 87.54 139.03 72.24Q150.98 56.94 172.75 52V66.47Q163.35 68.67 156.39 74.78Q149.42 80.89 145.67 89.97Q141.93 99.06 141.93 110.5V137.45Q141.93 148.75 145.67 157.9Q149.42 167.04 156.39 173.15Q163.35 179.26 172.75 181.49Z"/>
+  <path fill="url(#colon-split)" d="M215 116.92Q208.76 116.92 205.46 113.81Q202.17 110.7 202.17 105.46Q202.17 100.2 205.46 97.1Q208.76 94 215 94Q221.24 94 224.54 97.1Q227.83 100.2 227.83 105.46Q227.83 110.7 224.54 113.81Q221.24 116.92 215 116.92ZM215 179.5Q208.76 179.5 205.46 176.39Q202.17 173.27 202.17 168.04Q202.17 162.78 205.46 159.68Q208.76 156.58 215 156.58Q221.24 156.58 224.54 159.68Q227.83 162.78 227.83 168.04Q227.83 173.27 224.54 176.39Q221.24 179.5 215 179.5Z"/>
+  <path fill="#00ADD8" d="M257.25 196V181.49Q266.8 179.26 273.69 173.15Q280.58 167.04 284.33 157.9Q288.07 148.75 288.07 137.45V110.5Q288.07 99.06 284.33 89.97Q280.58 80.89 273.69 74.78Q266.8 68.67 257.25 66.47V52Q279.04 56.94 290.98 72.24Q302.93 87.54 302.93 110.5V137.45Q302.93 160.42 290.98 175.75Q279.04 191.09 257.25 196Z"/>
+  <path fill="#CE422B" d="M356.92 152V116.8H363.21V123.62H364.66L363.16 125.26Q363.16 121.07 365.72 118.61Q368.28 116.16 372.79 116.16Q378.27 116.16 381.25 119.5Q384.23 122.84 384.23 128.95V132.03H377.89V129.04Q377.89 125.31 376.04 123.48Q374.19 121.65 370.68 121.65Q367.07 121.65 365.16 123.76Q363.25 125.86 363.25 129.81V152Z M407.55 152.64Q401.31 152.64 397.61 148.99Q393.91 145.34 393.91 139.07V116.8H400.25V139.06Q400.25 142.76 402.2 144.93Q404.15 147.09 407.55 147.09Q410.99 147.09 412.97 144.93Q414.95 142.76 414.95 139.06V116.8H421.29V139.07Q421.29 145.35 417.53 149Q413.77 152.64 407.55 152.64Z M444.58 152.53Q440.61 152.53 437.76 151.32Q434.9 150.11 433.4 147.81Q431.9 145.51 431.9 142.25H438.21Q438.21 144.59 439.88 145.89Q441.55 147.19 444.58 147.19H447.4Q450.51 147.19 452.22 145.86Q453.94 144.53 453.94 142.11Q453.94 139.91 452.89 138.71Q451.85 137.51 449.7 137.25L440.22 135.91Q436.47 135.39 434.41 132.86Q432.35 130.33 432.35 126.25Q432.35 121.54 435.56 118.9Q438.77 116.27 444.52 116.27H447.37Q452.69 116.27 456.01 118.84Q459.34 121.41 459.56 125.6H453.19Q453.08 123.8 451.51 122.64Q449.94 121.48 447.37 121.48H444.52Q441.69 121.48 440.1 122.75Q438.51 124.01 438.51 126.19Q438.51 127.94 439.41 128.94Q440.32 129.94 442.04 130.2L450.92 131.43Q455.5 132.07 457.8 134.75Q460.1 137.43 460.1 142.09Q460.1 147.05 456.79 149.79Q453.49 152.53 447.4 152.53Z M487.92 152Q483.41 152 480.72 149.39Q478.03 146.78 478.03 142.38V122.56H468.02V116.8H478.03V106.88H484.37V116.8H498.67V122.56H484.37V142.34Q484.37 144.07 485.38 145.16Q486.38 146.24 488.06 146.24H498.35V152Z M514.78 163.52 519.91 149.89 506.77 116.8H513.54L521.47 137.6Q522 138.95 522.48 140.48Q522.96 142.01 523.16 143.18Q523.37 142.01 523.83 140.48Q524.3 138.95 524.78 137.6L532.16 116.8H538.83L521.4 163.52Z"/>
+  <path fill="#00ADD8" d="M561.2 152.53Q556.91 152.53 553.75 150.85Q550.6 149.17 548.87 146.01Q547.15 142.84 547.15 138.45V130.35Q547.15 125.91 548.87 122.77Q550.6 119.63 553.75 117.95Q556.91 116.27 561.2 116.27Q565.56 116.27 568.68 117.95Q571.8 119.63 573.53 122.77Q575.25 125.91 575.25 130.35V138.45Q575.25 142.84 573.53 146.01Q571.8 149.17 568.65 150.85Q565.5 152.53 561.2 152.53ZM561.2 146.93Q564.83 146.93 566.88 144.91Q568.92 142.89 568.92 139V129.8Q568.92 125.9 566.88 123.88Q564.83 121.87 561.2 121.87Q557.63 121.87 555.56 123.88Q553.48 125.9 553.48 129.8V139Q553.48 142.89 555.56 144.91Q557.63 146.93 561.2 146.93Z M586.04 152V116.8H592.33V123.52H593.78L592.28 125Q592.29 120.82 594.82 118.49Q597.35 116.16 601.74 116.16Q607.03 116.16 610.16 119.47Q613.29 122.78 613.29 128.46V152H606.95V129.48Q606.95 125.64 605.02 123.59Q603.09 121.54 599.77 121.54Q596.34 121.54 594.36 123.67Q592.37 125.8 592.37 129.7V152Z"/>
+</svg>
+    </a>
+    <nav class="links">
+      <a href="https://github.com/peltonapp/rustyon-go">GitHub</a>
+      <a href="https://github.com/peltonapp/rustyon-go/wiki">Docs</a>
+      <a href="https://pkg.go.dev/github.com/peltonapp/rustyon-go">Go reference</a>
+    </nav>
+  </header>
+
+  <p class="lead">Format, validate and convert RON in your browser. Everything runs locally as WebAssembly, nothing is sent to a server.</p>
+
+  <div class="controls">
+    <div class="modes" role="group" aria-label="Mode" id="modes">
+      <button type="button" data-mode="format" aria-pressed="true">Format</button>
+      <button type="button" data-mode="validate" aria-pressed="false">Validate</button>
+      <button type="button" data-mode="tojson" aria-pressed="false">RON to JSON</button>
+      <button type="button" data-mode="fromjson" aria-pressed="false">JSON to RON</button>
+    </div>
+    <label class="opt" id="indent-label">Indent
+      <select id="indent">
+        <option value="  ">2 spaces</option>
+        <option value="    " selected>4 spaces</option>
+        <option value="&#9;">Tab</option>
+        <option value="">Compact</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="panes">
+    <section class="pane">
+      <h2 id="in-title">RON input</h2>
+      <textarea id="input" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Input"></textarea>
+    </section>
+    <section class="pane">
+      <h2>Output</h2>
+      <pre id="output" aria-live="polite"></pre>
+    </section>
+  </div>
+
+  <div id="status" class="info" role="status">Loading WebAssembly...</div>
+
+  <footer>Powered by <a href="https://github.com/peltonapp/rustyon-go">rustyon-go</a>, an independent Go implementation of Rusty Object Notation.</footer>
+</main>
+
+<script src="wasm_exec.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var SAMPLE_RON = [
+    "// A small game config.",
+    "#![enable(implicit_some)]",
+    "GameConfig(",
+    "  window_size: (800, 600),",
+    "  window_title: \"Rusty Game\",",
+    "  difficulty: Hard,",
+    "  spawn: Circle(radius: 2.5),",
+    "  key_bindings: {\"up\": Up, \"down\": Down},",
+    "  tags: [\"fast\", \"fun\"],",
+    ")",
+    ""
+  ].join("\n");
+
+  var SAMPLE_JSON = JSON.stringify({
+    name: "rustyon",
+    version: 1,
+    features: ["format", "validate", "convert"],
+    limits: { depth: 128, strict: true },
+    note: null
+  }, null, 2) + "\n";
+
+  var MODES = {
+    format:   { fn: "rustyonFormat",   title: "RON input",  sample: SAMPLE_RON,  indent: true },
+    validate: { fn: "rustyonValidate", title: "RON input",  sample: SAMPLE_RON,  indent: false },
+    tojson:   { fn: "rustyonToJSON",   title: "RON input",  sample: SAMPLE_RON,  indent: true },
+    fromjson: { fn: "rustyonFromJSON", title: "JSON input", sample: SAMPLE_JSON, indent: true }
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var input = $("input"), output = $("output"), status = $("status"), indentSel = $("indent");
+  var mode = "format";
+  var ready = false;
+  var texts = {};
+  var timer = null;
+
+  function setStatus(kind, text, loc) {
+    status.className = kind;
+    status.textContent = "";
+    if (loc) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = loc.line + ":" + loc.column;
+      b.title = "Jump to this position";
+      b.addEventListener("click", function () { jump(loc.line, loc.column); });
+      status.appendChild(b);
+      status.appendChild(document.createTextNode("  " + text));
+    } else {
+      status.textContent = text;
+    }
+  }
+
+  function jump(line, col) {
+    var lines = input.value.split("\n"), pos = 0, i;
+    for (i = 0; i < line - 1 && i < lines.length; i++) pos += lines[i].length + 1;
+    pos += Math.max(0, col - 1);
+    input.focus();
+    input.setSelectionRange(pos, Math.min(pos + 1, input.value.length));
+  }
+
+  function run() {
+    if (!ready) return;
+    var m = MODES[mode];
+    var r = window[m.fn](input.value, indentSel.value);
+    if (r.ok) {
+      output.textContent = r.output;
+      setStatus("ok", mode === "validate" ? "Valid RON." : "Done.");
+    } else {
+      output.textContent = "";
+      var msg = String(r.error).replace(/^rustyon: (syntax error at \d+:\d+: )?/, "");
+      if (r.line > 0) setStatus("error", msg, { line: r.line, column: r.column });
+      else setStatus("error", msg);
+    }
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    timer = setTimeout(run, 120);
+  }
+
+  function setMode(next) {
+    texts[mode] = input.value;
+    mode = next;
+    var m = MODES[mode];
+    input.value = texts[mode] !== undefined ? texts[mode] : m.sample;
+    $("in-title").textContent = m.title;
+    $("indent-label").style.display = m.indent ? "" : "none";
+    Array.prototype.forEach.call($("modes").children, function (b) {
+      b.setAttribute("aria-pressed", String(b.dataset.mode === mode));
+    });
+    output.textContent = "";
+    run();
+  }
+
+  $("modes").addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (b) setMode(b.dataset.mode);
+  });
+  input.addEventListener("input", schedule);
+  indentSel.addEventListener("change", run);
+  input.value = SAMPLE_RON;
+
+  if (!WebAssembly.instantiateStreaming) {
+    WebAssembly.instantiateStreaming = function (resp, imports) {
+      return resp.then(function (r) { return r.arrayBuffer(); })
+        .then(function (buf) { return WebAssembly.instantiate(buf, imports); });
+    };
+  }
+  var go = new Go();
+  WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then(function (res) {
+    go.run(res.instance);
+    ready = true;
+    run();
+  }).catch(function (err) {
+    setStatus("error", "Could not load WebAssembly: " + err);
+  });
+})();
+</script>
+</body>
+</html>

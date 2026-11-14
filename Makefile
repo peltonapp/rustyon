@@ -5,7 +5,7 @@ GO       ?= go
 FUZZTIME ?= 30s
 PKGS     := ./...
 
-.PHONY: all test cover lint fmt vet golangci fuzz bench license build check clean
+.PHONY: all test cover lint fmt vet golangci fuzz bench license build playground check clean
 
 all: check
 
@@ -47,6 +47,14 @@ license:
 
 build:
 	$(GO) build -trimpath -o bin/rustyon ./cmd/rustyon
+
+# Build the WebAssembly playground into dist/playground. wasm_exec.js is
+# copied from the local Go toolchain so it always matches the compiler.
+playground:
+	mkdir -p dist/playground
+	GOOS=js GOARCH=wasm $(GO) build -trimpath -ldflags="-s -w" -o dist/playground/main.wasm ./playground/wasm
+	cp "$$($(GO) env GOROOT)/lib/wasm/wasm_exec.js" dist/playground/wasm_exec.js
+	cp playground/web/index.html dist/playground/index.html
 
 check: lint test license
 

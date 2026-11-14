@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2026 Arne K. (TRC-Loop)
+# SPDX-License-Identifier: BSD-3-Clause
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - "playground/**"
+      - "go.mod"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build playground
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Build playground
+        run: make playground
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist/playground
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
