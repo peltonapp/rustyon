@@ -259,7 +259,7 @@ func loadCorpus(tb testing.TB) [][]byte {
 // rawCases holds documents that are awkward to write in the corpus files.
 var rawCases = []string{
 	"\xff", "[\"a\xffb\"]", "\xEF\xBB\xBF1", "\xEF\xBB\xBF", "\x00", "1\x00", "\"a\x00b\"",
-	" 1", " 1", "‎1", "\u00851", "\v1\f", "\r\n1\r\n", "1\r\n// c\r\n",
+	"\xc2\xa01", "\xe2\x80\xa81", "\xe2\x80\x8e1", "\xe2\x80\x8f1", "\u00851", "\v1\f", "\r\n1\r\n", "1\r\n// c\r\n",
 	"'\n'", "'\r'", "\"\r\n\"", "\"a\\\r\nb\"", "\"a\\\rb\"", "\"\\\n\"", "\"\\\n  \t\n  x\"",
 	"r\"a\r\nb\"", "é", "r#é", "(é: 1)", "(日本: 1)", "日本", "Ünï", "x́", "́x",
 	"·", "a·b", "(a·b: 1)", "℘", "a℘", "ͺ", "゛", "ﾞ",

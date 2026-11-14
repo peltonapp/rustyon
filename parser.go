@@ -780,7 +780,7 @@ func (p *parser) integer() (number, error) {
 			p.cur = intCursor
 			res, err := p.parseInteger(neg, base, intSpecs[suf])
 			var pe *parseError
-			if !(errors.As(err, &pe) && (pe.kind == errUnderscore || pe.kind == errInvalidDigit)) {
+			if !errors.As(err, &pe) || (pe.kind != errUnderscore && pe.kind != errInvalidDigit) {
 				p.skipIdentifier()
 			}
 			return res, err
@@ -987,7 +987,7 @@ type escape struct {
 	r     rune
 }
 
-func (p *parser) decodeAsciiEscape() (byte, error) {
+func (p *parser) decodeASCIIEscape() (byte, error) {
 	var n byte
 	for range 2 {
 		c, err := p.nextChar()
@@ -1020,7 +1020,7 @@ func (p *parser) parseEscape(binary, isChar bool) (escape, error) {
 	case '0':
 		return escape{ascii: true, b: 0}, nil
 	case 'x':
-		b, err := p.decodeAsciiEscape()
+		b, err := p.decodeASCIIEscape()
 		if err != nil {
 			return escape{}, err
 		}
@@ -1038,7 +1038,7 @@ func (p *parser) parseEscape(binary, isChar bool) (escape, error) {
 			if !p.consumeStr(`\x`) {
 				return escape{}, p.fail(errOther, "not a valid byte-escaped Unicode character")
 			}
-			nb, err := p.decodeAsciiEscape()
+			nb, err := p.decodeASCIIEscape()
 			if err != nil {
 				return escape{}, err
 			}

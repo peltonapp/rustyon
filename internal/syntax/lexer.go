@@ -332,7 +332,7 @@ func IsXIDContinue(r rune) bool {
 	if unicode.Is(unicode.Pattern_Syntax, r) || unicode.Is(unicode.Pattern_White_Space, r) {
 		return false
 	}
-	if !(isIDStart(r) || unicode.In(r, unicode.Mn, unicode.Mc, unicode.Nd, unicode.Pc, unicode.Other_ID_Continue)) {
+	if !isIDStart(r) && !unicode.In(r, unicode.Mn, unicode.Mc, unicode.Nd, unicode.Pc, unicode.Other_ID_Continue) {
 		return false
 	}
 	switch {
