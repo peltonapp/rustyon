@@ -58,6 +58,9 @@ func TestParseLiterals(t *testing.T) {
 		{"+inf", Float(math.Inf(1))},
 		{"-inf", Float(math.Inf(-1))},
 		{"NaN", Float(math.NaN())},
+		{"inff32", Float(math.Inf(1))},
+		{"NaNf64", Float(math.NaN())},
+		{"r#inff32", Ident("inff32")},
 		{"-NaN", Float(math.NaN())},
 		{`"hello"`, String("hello")},
 		{`""`, String("")},
@@ -162,8 +165,10 @@ func TestParseErrors(t *testing.T) {
 		message string
 	}{
 		{"", 1, 1, "expected value"},
-		{"[1, 2", 1, 6, "expected ']'"},
-		{"[1 2]", 1, 4, "expected ']'"},
+		{"[1, 2", 1, 6, "expected ',' or ']'"},
+		{"[1 2]", 1, 4, "expected ',' or ']'"},
+		{strings.Repeat("9", 60), 1, 1, "does not fit into 128 bits"},
+		{"-170141183460469231731687303715884105729", 1, 1, "does not fit into 128 bits"},
 		{"(a: 1, 2)", 1, 8, "expected field name"},
 		{"{1 2}", 1, 4, "expected ':'"},
 		{"1 2", 1, 3, "expected end of input"},

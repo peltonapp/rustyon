@@ -284,7 +284,8 @@ func quoteBytes(b []byte) string {
 }
 
 var reservedIdents = map[string]bool{
-	"true": true, "false": true, "inf": true, "NaN": true, "None": true, "Some": true,
+	"true": true, "false": true, "None": true, "Some": true,
+	"inf": true, "inff32": true, "inff64": true, "NaN": true, "NaNf32": true, "NaNf64": true,
 }
 
 // formatIdent writes name as an identifier, using the raw form r#name when

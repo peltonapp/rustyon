@@ -32,7 +32,7 @@ func (e *SyntaxError) Error() string {
 // UnmarshalTypeError describes a RON value that cannot be stored in a Go
 // value of a specific type.
 type UnmarshalTypeError struct {
-	Value string       // description of the RON value, e.g. "string" or "variant Circle"
+	Value string       // description of the RON value, e.g. "string" or "tuple Circle"
 	Type  reflect.Type // Go type that could not hold the value
 	Path  string       // path to the value within the document, e.g. "servers[0].port"
 	Msg   string       // optional detail
@@ -106,12 +106,17 @@ func (e *UnsupportedValueError) Error() string {
 // MarshalerError wraps an error returned by a [Marshaler] or
 // [encoding.TextMarshaler].
 type MarshalerError struct {
-	Type reflect.Type
-	Err  error
+	Type   reflect.Type
+	Err    error
+	Method string // "MarshalRON" or "MarshalText"
 }
 
 func (e *MarshalerError) Error() string {
-	return "rustyon: error calling MarshalRON for type " + e.Type.String() + ": " + e.Err.Error()
+	method := e.Method
+	if method == "" {
+		method = "MarshalRON"
+	}
+	return "rustyon: error calling " + method + " for type " + e.Type.String() + ": " + e.Err.Error()
 }
 
 func (e *MarshalerError) Unwrap() error { return e.Err }

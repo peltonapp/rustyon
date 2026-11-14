@@ -53,7 +53,7 @@ func Unmarshal(data []byte, v any) error {
 	if err != nil {
 		return err
 	}
-	return decodeInto(doc.Value, v, &decodeOptions{})
+	return decodeInto(doc.Value, v, &decodeOptions{exts: doc.Extensions})
 }
 
 // FromValue stores a parsed [Value] in the Go value pointed to by target,
@@ -65,6 +65,7 @@ func FromValue(v Value, target any) error {
 type decodeOptions struct {
 	disallowUnknown bool
 	registry        *Registry
+	exts            Extensions // extensions enabled by the document
 }
 
 func decodeInto(val Value, v any, opts *decodeOptions) error {
@@ -129,10 +130,12 @@ func (dec *Decoder) init() error {
 		return dec.err
 	}
 	for dec.p.tok.Kind == syntax.Hash {
-		if _, err := dec.p.parseAttribute(); err != nil {
+		exts, err := dec.p.parseAttribute()
+		if err != nil {
 			dec.err = err
 			return err
 		}
+		dec.opts.exts |= exts
 	}
 	return nil
 }
@@ -267,9 +270,12 @@ func (d *decoder) decode(v Value, rv reflect.Value) error {
 	}
 
 	f := flagsOf(t)
-	if f.value && reflect.TypeOf(v) == t {
-		rv.Set(reflect.ValueOf(v))
-		return nil
+	if f.value {
+		if reflect.TypeOf(v) == t {
+			rv.Set(reflect.ValueOf(v))
+			return nil
+		}
+		return d.typeError(v, t, "expected "+reflect.Zero(t).Interface().(Value).Kind().String())
 	}
 
 	if t.Kind() == reflect.Pointer {
@@ -369,8 +375,13 @@ func (d *decoder) decode(v Value, rv reflect.Value) error {
 		}
 		rv.SetInt(n)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		i, ok := v.(Int)
-		if !ok {
+		var i Int
+		switch v := v.(type) {
+		case Int:
+			i = v
+		case Char:
+			i = NewInt(int64(v))
+		default:
 			return d.typeError(v, t, "")
 		}
 		n, ok := i.Uint64()
@@ -410,11 +421,28 @@ func (d *decoder) decode(v Value, rv reflect.Value) error {
 	case reflect.Map:
 		return d.decodeMap(v, rv)
 	case reflect.Struct:
+		if d.opts.exts&ExplicitStructNames != 0 && missingStructName(v) {
+			return d.typeError(v, t, "the explicit_struct_names extension requires a struct name")
+		}
 		return d.decodeStruct(v, rv)
 	default:
 		return d.typeError(v, t, "unsupported Go type")
 	}
 	return nil
+}
+
+// missingStructName reports whether v is a struct, tuple or unit written
+// without a name.
+func missingStructName(v Value) bool {
+	switch v := v.(type) {
+	case Struct:
+		return v.Name == ""
+	case Tuple:
+		return v.Name == ""
+	case Unit:
+		return true
+	}
+	return false
 }
 
 func (d *decoder) decodeInterface(v Value, rv reflect.Value) error {

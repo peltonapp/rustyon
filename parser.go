@@ -163,6 +163,14 @@ func (p *parser) expect(k syntax.Kind) error {
 	return p.next()
 }
 
+// expectClose consumes the closing delimiter k after a collection element.
+func (p *parser) expectClose(k syntax.Kind) error {
+	if p.tok.Kind != k {
+		return p.unexpected("',' or " + k.String())
+	}
+	return p.next()
+}
+
 func (p *parser) parseDocument() (*Document, error) {
 	doc := &Document{}
 	for p.tok.Kind == syntax.Hash {
@@ -274,9 +282,9 @@ func (p *parser) parseIdentValue() (Value, error) {
 			return Bool(true), p.next()
 		case "false":
 			return Bool(false), p.next()
-		case "inf":
+		case "inf", "inff32", "inff64":
 			return Float(math.Inf(1)), p.next()
-		case "NaN":
+		case "NaN", "NaNf32", "NaNf64":
 			return Float(math.NaN()), p.next()
 		case "None":
 			return None, p.next()
@@ -359,7 +367,7 @@ func (p *parser) parseParens(name string) (Value, error) {
 				return nil, err
 			}
 		}
-		return s, p.expect(syntax.RParen)
+		return s, p.expectClose(syntax.RParen)
 	}
 	tup := Tuple{Name: name}
 	for p.tok.Kind != syntax.RParen {
@@ -375,7 +383,7 @@ func (p *parser) parseParens(name string) (Value, error) {
 			return nil, err
 		}
 	}
-	return tup, p.expect(syntax.RParen)
+	return tup, p.expectClose(syntax.RParen)
 }
 
 func (p *parser) parseList() (Value, error) {
@@ -396,7 +404,7 @@ func (p *parser) parseList() (Value, error) {
 			return nil, err
 		}
 	}
-	return list, p.expect(syntax.RBracket)
+	return list, p.expectClose(syntax.RBracket)
 }
 
 func (p *parser) parseMap() (Value, error) {
@@ -424,5 +432,5 @@ func (p *parser) parseMap() (Value, error) {
 			return nil, err
 		}
 	}
-	return m, p.expect(syntax.RBrace)
+	return m, p.expectClose(syntax.RBrace)
 }

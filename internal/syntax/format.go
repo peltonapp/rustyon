@@ -322,7 +322,10 @@ func (p *fparser) parseDoc() (*fdoc, error) {
 	return d, nil
 }
 
-var reservedNoParens = map[string]bool{"true": true, "false": true, "inf": true, "NaN": true, "None": true}
+var reservedNoParens = map[string]bool{
+	"true": true, "false": true, "None": true,
+	"inf": true, "inff32": true, "inff64": true, "NaN": true, "NaNf32": true, "NaNf64": true,
+}
 
 func (p *fparser) parseNode() (fnode, error) {
 	p.skipComments()

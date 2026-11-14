@@ -55,6 +55,11 @@ var suffixRanges = map[string]intRange{
 	"u64": bitRange(64, false), "u128": bitRange(128, false), "usize": bitRange(64, false),
 }
 
+var (
+	anyIntMin = suffixRanges["i128"].min
+	anyIntMax = suffixRanges["u128"].max
+)
+
 // ParseInt decodes an integer token. Values that fit into an int64 are
 // returned as small with big == nil; larger values are returned in big.
 func ParseInt(t Token) (small int64, bigN *big.Int, err error) {
@@ -109,6 +114,9 @@ func ParseInt(t Token) (small int64, bigN *big.Int, err error) {
 		if n.Cmp(r.min) < 0 || n.Cmp(r.max) > 0 {
 			return 0, nil, errors.New("integer " + t.Raw + " out of range for " + t.Suffix)
 		}
+	} else if n.Cmp(anyIntMin) < 0 || n.Cmp(anyIntMax) > 0 {
+		// Without a suffix an integer must fit into i128 or u128.
+		return 0, nil, errors.New("integer " + t.Raw + " does not fit into 128 bits")
 	}
 	if n.IsInt64() {
 		return n.Int64(), nil, nil

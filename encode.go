@@ -350,7 +350,9 @@ func (e *encoder) encodePlain(rv reflect.Value) (Value, error) {
 }
 
 func (e *encoder) wrapSome(v Value) Value {
-	if e.opts.implicitSome {
+	// An inner Option must stay wrapped, or Some(None) would collapse into
+	// None under implicit_some.
+	if _, isOption := v.(Option); e.opts.implicitSome && !isOption {
 		return v
 	}
 	return Some(v)
@@ -362,11 +364,11 @@ func (e *encoder) callMarshaler(rv reflect.Value) (Value, error) {
 	}
 	b, err := rv.Interface().(Marshaler).MarshalRON()
 	if err != nil {
-		return nil, &MarshalerError{Type: rv.Type(), Err: err}
+		return nil, &MarshalerError{Type: rv.Type(), Err: err, Method: "MarshalRON"}
 	}
 	v, err := Parse(b)
 	if err != nil {
-		return nil, &MarshalerError{Type: rv.Type(), Err: err}
+		return nil, &MarshalerError{Type: rv.Type(), Err: err, Method: "MarshalRON"}
 	}
 	return v, nil
 }
@@ -377,7 +379,7 @@ func (e *encoder) callTextMarshaler(rv reflect.Value) (Value, error) {
 	}
 	b, err := rv.Interface().(encoding.TextMarshaler).MarshalText()
 	if err != nil {
-		return nil, &MarshalerError{Type: rv.Type(), Err: err}
+		return nil, &MarshalerError{Type: rv.Type(), Err: err, Method: "MarshalText"}
 	}
 	return String(b), nil
 }
@@ -426,16 +428,17 @@ func (e *encoder) encodeMap(rv reflect.Value) (Value, error) {
 		}
 		entries = append(entries, en)
 	}
+	// A total order: keys of different kinds sort by kind first, then
+	// strings and integers by value and everything else by RON text.
 	slices.SortFunc(entries, func(a, b entry) int {
+		if c := cmp.Compare(a.Key.Kind(), b.Key.Kind()); c != 0 {
+			return c
+		}
 		switch ak := a.Key.(type) {
 		case String:
-			if bk, ok := b.Key.(String); ok {
-				return cmp.Compare(ak, bk)
-			}
+			return cmp.Compare(ak, b.Key.(String))
 		case Int:
-			if bk, ok := b.Key.(Int); ok {
-				return ak.Cmp(bk)
-			}
+			return ak.Cmp(b.Key.(Int))
 		}
 		return cmp.Compare(a.sortKey, b.sortKey)
 	})

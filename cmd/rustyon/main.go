@@ -7,7 +7,7 @@
 // Usage:
 //
 //	rustyon fmt [-w] [-l] [-indent str] [file ...]
-//	rustyon validate [file ...]
+//	rustyon validate [-q] [file ...]
 //	rustyon to-json [-indent str] [file]
 //	rustyon from-json [-structs] [-indent str] [file]
 //	rustyon version
