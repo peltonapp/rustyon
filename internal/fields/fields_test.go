@@ -45,8 +45,8 @@ type outer struct {
 	*hidden        // pointer to an unexported struct cannot be allocated, so it is skipped
 	A       string // shadows Inner.A
 	Skip    int    `ron:"-"`
-	private int
-	Opt     int `ron:"opt,omitempty,omitzero"`
+	private int    //nolint:unused // checks that unexported fields are skipped
+	Opt     int    `ron:"opt,omitempty,omitzero"`
 }
 
 func TestFor(t *testing.T) {

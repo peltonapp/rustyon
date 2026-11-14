@@ -283,19 +283,44 @@ func (m *Map) Set(key, v Value) {
 	*m = append(*m, MapEntry{Key: key, Value: v})
 }
 
-func (Unit) Kind() Kind   { return KindUnit }
-func (Bool) Kind() Kind   { return KindBool }
-func (Int) Kind() Kind    { return KindInt }
-func (Float) Kind() Kind  { return KindFloat }
+// Kind returns [KindUnit].
+func (Unit) Kind() Kind { return KindUnit }
+
+// Kind returns [KindBool].
+func (Bool) Kind() Kind { return KindBool }
+
+// Kind returns [KindInt].
+func (Int) Kind() Kind { return KindInt }
+
+// Kind returns [KindFloat].
+func (Float) Kind() Kind { return KindFloat }
+
+// Kind returns [KindString].
 func (String) Kind() Kind { return KindString }
-func (Char) Kind() Kind   { return KindChar }
-func (Bytes) Kind() Kind  { return KindBytes }
-func (List) Kind() Kind   { return KindList }
-func (Map) Kind() Kind    { return KindMap }
-func (Tuple) Kind() Kind  { return KindTuple }
+
+// Kind returns [KindChar].
+func (Char) Kind() Kind { return KindChar }
+
+// Kind returns [KindBytes].
+func (Bytes) Kind() Kind { return KindBytes }
+
+// Kind returns [KindList].
+func (List) Kind() Kind { return KindList }
+
+// Kind returns [KindMap].
+func (Map) Kind() Kind { return KindMap }
+
+// Kind returns [KindTuple].
+func (Tuple) Kind() Kind { return KindTuple }
+
+// Kind returns [KindStruct].
 func (Struct) Kind() Kind { return KindStruct }
+
+// Kind returns [KindOption].
 func (Option) Kind() Kind { return KindOption }
-func (Ident) Kind() Kind  { return KindIdent }
+
+// Kind returns [KindIdent].
+func (Ident) Kind() Kind { return KindIdent }
 
 func (Unit) isValue()   {}
 func (Bool) isValue()   {}

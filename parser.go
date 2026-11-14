@@ -92,10 +92,11 @@ func syntaxError(err error) error {
 }
 
 type parser struct {
-	lex   *syntax.Lexer
-	tok   syntax.Token   // current token, never a comment
-	ahead []syntax.Token // lookahead buffer, never comments
-	depth int
+	lex      *syntax.Lexer
+	tok      syntax.Token // current token, never a comment
+	ahead    syntax.Token // one token of lookahead, never a comment
+	hasAhead bool
+	depth    int
 }
 
 func newParser(data []byte) (*parser, error) {
@@ -122,9 +123,9 @@ func (p *parser) lexNonComment() (syntax.Token, error) {
 }
 
 func (p *parser) next() error {
-	if len(p.ahead) > 0 {
-		p.tok = p.ahead[0]
-		p.ahead = p.ahead[1:]
+	if p.hasAhead {
+		p.tok = p.ahead
+		p.hasAhead = false
 		return nil
 	}
 	t, err := p.lexNonComment()
@@ -137,14 +138,14 @@ func (p *parser) next() error {
 
 // peek returns the token after the current one.
 func (p *parser) peek() (syntax.Token, error) {
-	if len(p.ahead) == 0 {
+	if !p.hasAhead {
 		t, err := p.lexNonComment()
 		if err != nil {
 			return t, err
 		}
-		p.ahead = append(p.ahead, t)
+		p.ahead, p.hasAhead = t, true
 	}
-	return p.ahead[0], nil
+	return p.ahead, nil
 }
 
 func (p *parser) errorf(format string, args ...any) error {

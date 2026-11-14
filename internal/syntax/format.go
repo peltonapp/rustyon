@@ -71,21 +71,53 @@ type fheader struct {
 }
 
 type fparser struct {
-	toks  []Token
+	toks  []ftok
 	i     int
 	stray []fcomment
 	depth int
 }
 
+// ftok is the compact token the formatter keeps for the whole document.
+// Literals are validated while lexing, so only the source text is needed.
+type ftok struct {
+	Kind     Kind
+	RawIdent bool
+	Newlines int
+	Pos      Position
+	Raw      string
+}
+
+// Str returns an identifier's name without the r# prefix.
+func (t ftok) Str() string {
+	if t.RawIdent {
+		return t.Raw[2:]
+	}
+	return t.Raw
+}
+
+func (t ftok) Describe() string {
+	return Token{Kind: t.Kind, Raw: t.Raw}.Describe()
+}
+
 func newFParser(src []byte) (*fparser, error) {
 	l := NewLexer(src)
-	toks := make([]Token, 0, len(src)/4)
+	toks := make([]ftok, 0, len(src)/8+1)
 	for {
 		t, err := l.Next()
 		if err != nil {
 			return nil, err
 		}
-		toks = append(toks, t)
+		switch t.Kind {
+		case Int:
+			if _, _, err := ParseInt(t); err != nil {
+				return nil, Errorf(t.Pos, "%s", err.Error())
+			}
+		case Float:
+			if _, err := ParseFloat(t); err != nil {
+				return nil, Errorf(t.Pos, "%s", err.Error())
+			}
+		}
+		toks = append(toks, ftok{Kind: t.Kind, RawIdent: t.RawIdent, Newlines: t.Newlines, Pos: t.Pos, Raw: t.Raw})
 		if t.Kind == EOF {
 			break
 		}
@@ -93,9 +125,9 @@ func newFParser(src []byte) (*fparser, error) {
 	return &fparser{toks: toks}, nil
 }
 
-func (p *fparser) tok() Token { return p.toks[p.i] }
+func (p *fparser) tok() *ftok { return &p.toks[p.i] }
 
-func toComment(t Token) fcomment {
+func toComment(t *ftok) fcomment {
 	text := t.Raw
 	if t.Kind == LineComment {
 		text = strings.TrimRight(text, " \t\r")
@@ -158,7 +190,7 @@ func (p *fparser) parseAttribute(h *fheader) error {
 		}
 	}
 	p.skipComments()
-	if p.tok().Kind != Ident || p.tok().Str != "enable" {
+	if p.tok().Kind != Ident || p.tok().Str() != "enable" {
 		return p.unexpected("enable")
 	}
 	p.i++
@@ -173,10 +205,10 @@ func (p *fparser) parseAttribute(h *fheader) error {
 		if p.tok().Kind != Ident {
 			return p.unexpected("extension name")
 		}
-		if _, ok := ExtensionBit(p.tok().Str); !ok {
-			return p.errorf("unknown extension %q", p.tok().Str)
+		if _, ok := ExtensionBit(p.tok().Str()); !ok {
+			return p.errorf("unknown extension %q", p.tok().Str())
 		}
-		h.exts = append(h.exts, p.tok().Str)
+		h.exts = append(h.exts, p.tok().Str())
 		p.i++
 		p.skipComments()
 		if p.tok().Kind != Comma {
@@ -241,37 +273,25 @@ func (p *fparser) parseNode() (*fnode, error) {
 		strayLen := len(p.stray)
 		p.skipComments()
 		if p.tok().Kind == LParen {
-			if !t.RawIdent && reservedNoParens[t.Str] {
+			if !t.RawIdent && reservedNoParens[t.Str()] {
 				return nil, p.unexpected("end of input")
 			}
 			n, err := p.parseColl(t.Raw)
 			if err != nil {
 				return nil, err
 			}
-			if !t.RawIdent && t.Str == "Some" && (len(n.items) != 1 || n.items[0].field != "") {
+			if !t.RawIdent && t.Str() == "Some" && (len(n.items) != 1 || n.items[0].field != "") {
 				return nil, Errorf(t.Pos, "Some takes exactly one value")
 			}
 			return n, nil
 		}
-		if !t.RawIdent && t.Str == "Some" {
+		if !t.RawIdent && t.Str() == "Some" {
 			return nil, p.unexpected("'('")
 		}
 		p.i = save
 		p.stray = p.stray[:strayLen]
 		return &fnode{text: t.Raw}, nil
-	case Int:
-		if _, _, err := ParseInt(t); err != nil {
-			return nil, Errorf(t.Pos, "%s", err.Error())
-		}
-		p.i++
-		return &fnode{text: t.Raw}, nil
-	case Float:
-		if _, err := ParseFloat(t); err != nil {
-			return nil, Errorf(t.Pos, "%s", err.Error())
-		}
-		p.i++
-		return &fnode{text: t.Raw}, nil
-	case String, ByteString, Char, Byte:
+	case Int, Float, String, ByteString, Char, Byte:
 		p.i++
 		return &fnode{text: t.Raw}, nil
 	}
@@ -297,7 +317,7 @@ func (p *fparser) parseColl(name string) (*fnode, error) {
 	closeKind, open, closeCh := closeFor(p.tok().Kind)
 	n := &fnode{text: name, open: open, close: closeCh}
 	p.i++
-	mark := func(t Token) {
+	mark := func(t *ftok) {
 		if t.Newlines > 0 {
 			n.multiline = true
 		}
@@ -366,7 +386,8 @@ func (p *fparser) parseColl(name string) (*fnode, error) {
 		if hadComma {
 			mark(p.tok())
 			p.i++
-			it.trailing = append(before, p.sameLineComments()...)
+			it.trailing = before
+			it.trailing = append(it.trailing, p.sameLineComments()...)
 		} else {
 			p.i = save
 			it.trailing = p.sameLineComments()

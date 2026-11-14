@@ -442,13 +442,13 @@ func (l *Lexer) scanQuoted(start Position, quote rune, byteStr bool) (string, er
 	for {
 		p := l.Pos()
 		r := l.peek()
-		switch {
-		case r == -1:
+		switch r {
+		case -1:
 			return "", Errorf(start, "unterminated string")
-		case r == quote:
+		case quote:
 			l.advance()
 			return sb.String(), nil
-		case r == '\\':
+		case '\\':
 			l.advance()
 			if l.peek() == '\n' || l.peek() == '\r' {
 				// Line continuation: skip the newline and leading whitespace.
@@ -574,7 +574,8 @@ func (l *Lexer) takeHex(maxDigits int) string {
 	b := l.off
 	for i := range maxDigits {
 		r := l.peek()
-		if !(isDigit(r) || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') || (r == '_' && i > 0)) {
+		isHex := isBaseDigit(r, 16) || (r == '_' && i > 0)
+		if !isHex {
 			break
 		}
 		l.advance()
@@ -607,7 +608,7 @@ func (l *Lexer) scanNumber(start Position) (Token, error) {
 			}
 			return Token{}, Errorf(start, "expected number after sign, found %q", word)
 		}
-		if !isDigit(l.peek()) && !(l.peek() == '.' && isDigit(l.peekAt(1))) {
+		if startsFraction := l.peek() == '.' && isDigit(l.peekAt(1)); !isDigit(l.peek()) && !startsFraction {
 			return Token{}, Errorf(start, "expected number after sign")
 		}
 	}

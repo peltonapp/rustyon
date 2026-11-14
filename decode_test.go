@@ -290,7 +290,7 @@ func TestDecoderStream(t *testing.T) {
 		t.Errorf("got %#v, want %#v", got, want)
 	}
 	var v any
-	if err := dec.Decode(&v); err != io.EOF {
+	if err := dec.Decode(&v); !errors.Is(err, io.EOF) {
 		t.Errorf("after end: %v, want io.EOF", err)
 	}
 }

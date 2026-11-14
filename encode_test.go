@@ -28,7 +28,7 @@ type taggedStruct struct {
 	D       int    `ron:"-"`
 	E       []int  `ron:"e,omitempty"`
 	F       Zeroer `ron:",omitzero"`
-	private int
+	private int    //nolint:unused // checks that unexported fields are skipped
 }
 
 type Zeroer struct{ V int }
