@@ -5,6 +5,7 @@ package rustyon
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -83,8 +84,6 @@ func (r *sRaw) UnmarshalRON(b []byte) error {
 	r.Raw = string(b)
 	return nil
 }
-
-type sUnitEnumLike string
 
 type sTarget struct {
 	_      struct{} `ron:"Target"`
@@ -223,10 +222,9 @@ func sameGo(a, b reflect.Value) bool {
 		if a.IsNil() != b.IsNil() || a.Len() != b.Len() {
 			return false
 		}
-		nan := 0
 		for _, k := range a.MapKeys() {
+			// NaN keys never match themselves; the lengths were compared.
 			if k.Kind() == reflect.Interface && !k.IsNil() && k.Elem().Kind() == reflect.Float64 && math.IsNaN(k.Elem().Float()) {
-				nan++
 				continue
 			}
 			bv := b.MapIndex(k)
@@ -234,7 +232,6 @@ func sameGo(a, b reflect.Value) bool {
 				return false
 			}
 		}
-		_ = nan
 		return true
 	case reflect.Struct:
 		for i := range a.NumField() {
@@ -370,17 +367,19 @@ func TestStreamDecoderSequence(t *testing.T) {
 	}
 	var wrong int
 	err := dec.Decode(&wrong)
-	if _, ok := err.(*UnmarshalTypeError); !ok {
+	var te *UnmarshalTypeError
+	if !errors.As(err, &te) {
 		t.Fatalf("want type error, got %v", err)
 	}
 	var p *int
 	if err := dec.Decode(&p); err != nil || p == nil || *p != 4 {
 		t.Fatal(p, err)
 	}
-	if _, ok := dec.Decode(&p).(*SyntaxError); !ok {
-		t.Fatalf("want syntax error")
+	var se *SyntaxError
+	if err := dec.Decode(&p); !errors.As(err, &se) {
+		t.Fatalf("want syntax error, got %v", err)
 	}
-	if err := dec.Decode(&p); err == nil || err == io.EOF {
+	if err := dec.Decode(&p); err == nil || errors.Is(err, io.EOF) {
 		t.Fatalf("error must be sticky, got %v", err)
 	}
 }

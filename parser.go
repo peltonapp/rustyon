@@ -1767,6 +1767,11 @@ func (p *parser) parseValue() (Value, error) {
 	if err := p.classify(&h); err != nil {
 		return nil, err
 	}
+	return p.build(&h)
+}
+
+// build parses the rest of the value described by h into the tree.
+func (p *parser) build(h *header) (Value, error) {
 	switch h.kind {
 	case hBool:
 		return Bool(h.b), nil
@@ -1783,9 +1788,9 @@ func (p *parser) parseValue() (Value, error) {
 	case hIdent:
 		return Ident(h.s), nil
 	case hStruct:
-		return p.parseStruct(&h)
+		return p.parseStruct(h)
 	case hTuple:
-		return p.parseTuple(&h)
+		return p.parseTuple(h)
 	case hList:
 		return p.parseList()
 	case hMap:

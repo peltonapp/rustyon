@@ -6,6 +6,7 @@ package rustyon
 import (
 	"errors"
 	"math"
+	"math/big"
 	"reflect"
 	"strings"
 	"sync"
@@ -37,9 +38,11 @@ type typePlan struct {
 	kind  reflect.Kind
 	tree  bool // always decode through the tree
 	bytes bool // slice whose element is a plain uint8 type
-	elem  atomic.Pointer[typePlan]
-	key   atomic.Pointer[typePlan]
-	st    atomic.Pointer[structPlan]
+
+	anyIface bool // an interface without methods
+	elem     atomic.Pointer[typePlan]
+	key      atomic.Pointer[typePlan]
+	st       atomic.Pointer[structPlan]
 }
 
 type structPlan struct {
@@ -56,7 +59,8 @@ func planOf(t reflect.Type) *typePlan {
 	fl := flagsOf(t)
 	k := t.Kind()
 	pl := &typePlan{t: t, kind: k}
-	pl.tree = t == valueType || fl.value || k == reflect.Interface || t == bigIntType
+	pl.anyIface = k == reflect.Interface && t.NumMethod() == 0
+	pl.tree = t == valueType || fl.value || (k == reflect.Interface && !pl.anyIface) || t == bigIntType
 	if k != reflect.Pointer && (fl.unmarshaler || fl.textUnmarshaler) {
 		pl.tree = true
 	}
@@ -199,15 +203,14 @@ func (dec *Decoder) decodeStream(v any) error {
 
 func (s *streamer) value(rv reflect.Value, pl *typePlan) error {
 	p := s.p
-	start, nv := p.cur, p.newtypeVariant
 	var h header
 	if err := p.classify(&h); err != nil {
 		return err
 	}
 	if pl == nil {
-		return s.skip(&h, start, nv)
+		return s.skip(&h)
 	}
-	return s.store(&h, rv, pl, start, nv)
+	return s.store(&h, rv, pl)
 }
 
 // guardedValue is value inside one unit of the recursion budget.
@@ -222,21 +225,25 @@ func (s *streamer) guardedValue(rv reflect.Value, pl *typePlan) error {
 	return err
 }
 
-// viaTree parses the value that starts at start into a tree and decodes it
-// with the tree decoder.
-func (s *streamer) viaTree(rv reflect.Value, start int, nv bool) error {
-	p := s.p
-	p.cur, p.newtypeVariant = start, nv
-	v, err := p.parseValue()
+// viaTree builds the tree for the rest of the value described by h and
+// decodes it with the tree decoder.
+func (s *streamer) viaTree(h *header, rv reflect.Value) error {
+	v, err := s.p.build(h)
 	if err != nil {
 		return err
 	}
 	return s.d.decode(v, rv)
 }
 
-func (s *streamer) store(h *header, rv reflect.Value, pl *typePlan, start int, nv bool) error {
+func (s *streamer) store(h *header, rv reflect.Value, pl *typePlan) error {
 	if pl.tree || h.kind == hRange {
-		return s.viaTree(rv, start, nv)
+		return s.viaTree(h, rv)
+	}
+	if pl.anyIface {
+		if s.regActive && s.d.reg.enum(pl.t) != nil {
+			return s.viaTree(h, rv)
+		}
+		return s.storeAny(h, rv)
 	}
 	t := pl.t
 	if pl.kind == reflect.Pointer {
@@ -253,10 +260,10 @@ func (s *streamer) store(h *header, rv reflect.Value, pl *typePlan, start int, n
 		if rv.IsNil() {
 			rv.Set(reflect.New(t.Elem()))
 		}
-		return s.store(h, rv.Elem(), pl.elemPlan(), start, nv)
+		return s.store(h, rv.Elem(), pl.elemPlan())
 	}
 	if s.regActive && s.regTree(t) {
-		return s.viaTree(rv, start, nv)
+		return s.viaTree(h, rv)
 	}
 
 	switch pl.kind {
@@ -331,17 +338,200 @@ func (s *streamer) store(h *header, rv reflect.Value, pl *typePlan, start int, n
 			return errStream
 		}
 	case reflect.Slice:
-		return s.storeSlice(h, rv, pl, start, nv)
+		return s.storeSlice(h, rv, pl)
 	case reflect.Array:
-		return s.storeArray(h, rv, pl, start, nv)
+		return s.storeArray(h, rv, pl)
 	case reflect.Map:
 		return s.storeMap(h, rv, pl)
 	case reflect.Struct:
-		return s.storeStruct(h, rv, pl, start, nv)
+		return s.storeStruct(h, rv, pl)
 	default:
 		return errStream
 	}
 	return nil
+}
+
+// storeAny decodes the value described by h into an empty interface the way
+// decoder.native converts a tree.
+func (s *streamer) storeAny(h *header, rv reflect.Value) error {
+	x, err := s.native(h)
+	if err != nil {
+		return err
+	}
+	if x == nil {
+		rv.SetZero()
+	} else {
+		rv.Set(reflect.ValueOf(x))
+	}
+	return nil
+}
+
+func (s *streamer) guardedNative() (any, error) {
+	p := s.p
+	if p.limit == 0 {
+		return nil, p.errRecursion()
+	}
+	p.limit--
+	var h header
+	err := p.classify(&h)
+	var x any
+	if err == nil {
+		x, err = s.native(&h)
+	}
+	p.limit++
+	return x, err
+}
+
+// native mirrors decoder.native: it converts the value described by h into
+// plain Go values.
+func (s *streamer) native(h *header) (any, error) {
+	switch h.kind {
+	case hBool:
+		return h.b, nil
+	case hNone, hUnit:
+		return nil, nil
+	case hSome:
+		p := s.p
+		if err := p.skipWS(); err != nil {
+			return nil, err
+		}
+		if p.consumeChar('(') {
+			if err := p.skipWS(); err != nil {
+				return nil, err
+			}
+			p.newtypeVariant = p.exts&UnwrapVariantNewtypes != 0
+			x, err := s.guardedNative()
+			if err != nil {
+				return nil, err
+			}
+			p.newtypeVariant = false
+			if _, err := p.comma(); err != nil {
+				return nil, err
+			}
+			if !p.consumeChar(')') {
+				return nil, errStream
+			}
+			return x, nil
+		}
+		if p.exts&ImplicitSome != 0 {
+			return s.guardedNative()
+		}
+		return nil, errStream
+	case hNum:
+		if h.num.isFloat {
+			return h.num.f, nil
+		}
+		i := intValue(h.num.neg, h.num.mag)
+		if n, ok := i.Int64(); ok {
+			return n, nil
+		}
+		if n, ok := i.Uint64(); ok {
+			return n, nil
+		}
+		return i.b, nil
+	case hRange:
+		v, err := s.p.build(h)
+		if err != nil {
+			return nil, err
+		}
+		return s.d.native(v)
+	case hIdent, hString:
+		return strings.Clone(h.s), nil
+	case hChar:
+		return h.r, nil
+	case hBytes:
+		return h.bytes, nil
+	case hList, hTuple:
+		sq, err := s.open(h)
+		if err != nil {
+			return nil, err
+		}
+		out := []any{}
+		for {
+			ok, err := s.next(&sq)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				break
+			}
+			x, err := s.guardedNative()
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, x)
+			if err := s.comma(&sq); err != nil {
+				return nil, err
+			}
+		}
+		return out, s.close(&sq)
+	case hStruct:
+		sq, err := s.open(h)
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]any{}
+		for {
+			ok, err := s.next(&sq)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				break
+			}
+			name, err := s.fieldHead()
+			if err != nil {
+				return nil, err
+			}
+			x, err := s.guardedNative()
+			if err != nil {
+				return nil, err
+			}
+			out[strings.Clone(name)] = x
+			if err := s.comma(&sq); err != nil {
+				return nil, err
+			}
+		}
+		return out, s.close(&sq)
+	case hMap:
+		sq, err := s.open(h)
+		if err != nil {
+			return nil, err
+		}
+		out := map[any]any{}
+		for {
+			ok, err := s.next(&sq)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				break
+			}
+			k, err := s.guardedNative()
+			if err != nil {
+				return nil, err
+			}
+			if k != nil && !reflect.TypeOf(k).Comparable() {
+				return nil, errStream
+			}
+			if b, isBig := k.(*big.Int); isBig {
+				k = b.String()
+			}
+			if err := s.colon(); err != nil {
+				return nil, err
+			}
+			x, err := s.guardedNative()
+			if err != nil {
+				return nil, err
+			}
+			out[k] = x
+			if err := s.comma(&sq); err != nil {
+				return nil, err
+			}
+		}
+		return out, s.close(&sq)
+	}
+	return nil, errStream
 }
 
 // someBody decodes the payload of Some after the Some keyword into rv, or
@@ -458,14 +648,12 @@ func (s *streamer) colon() error {
 }
 
 // skip parses and discards the value described by h.
-func (s *streamer) skip(h *header, start int, nv bool) error {
-	p := s.p
+func (s *streamer) skip(h *header) error {
 	switch h.kind {
 	case hSome:
 		return s.someBody(reflect.Value{}, nil)
 	case hRange:
-		p.cur, p.newtypeVariant = start, nv
-		_, err := p.parseValue()
+		_, err := s.p.build(h)
 		return err
 	case hList, hTuple:
 		sq, err := s.open(h)
@@ -573,9 +761,9 @@ func (s *streamer) tupleCount(h *header) (int, error) {
 	return n, nil
 }
 
-func (s *streamer) storeSlice(h *header, rv reflect.Value, pl *typePlan, start int, nv bool) error {
+func (s *streamer) storeSlice(h *header, rv reflect.Value, pl *typePlan) error {
 	t := pl.t
-	if pl.bytes && !(s.regActive && s.d.reg.unitEnum(t.Elem()) != nil) {
+	if pl.bytes && (!s.regActive || s.d.reg.unitEnum(t.Elem()) == nil) {
 		switch h.kind {
 		case hBytes:
 			rv.SetBytes(h.bytes)
@@ -591,7 +779,7 @@ func (s *streamer) storeSlice(h *header, rv reflect.Value, pl *typePlan, start i
 		return nil
 	case hList, hTuple:
 	case hBytes:
-		return s.viaTree(rv, start, nv)
+		return s.viaTree(h, rv)
 	default:
 		return errStream
 	}
@@ -630,7 +818,7 @@ func (s *streamer) storeSlice(h *header, rv reflect.Value, pl *typePlan, start i
 	return nil
 }
 
-func (s *streamer) storeArray(h *header, rv reflect.Value, pl *typePlan, start int, nv bool) error {
+func (s *streamer) storeArray(h *header, rv reflect.Value, pl *typePlan) error {
 	size := pl.t.Len()
 	switch h.kind {
 	case hUnit:
@@ -640,7 +828,7 @@ func (s *streamer) storeArray(h *header, rv reflect.Value, pl *typePlan, start i
 		return nil
 	case hList, hTuple:
 	case hBytes:
-		return s.viaTree(rv, start, nv)
+		return s.viaTree(h, rv)
 	default:
 		return errStream
 	}
@@ -741,7 +929,7 @@ func (s *streamer) storeMap(h *header, rv reflect.Value, pl *typePlan) error {
 	return s.close(&sq)
 }
 
-func (s *streamer) storeStruct(h *header, rv reflect.Value, pl *typePlan, start int, nv bool) error {
+func (s *streamer) storeStruct(h *header, rv reflect.Value, pl *typePlan) error {
 	if s.d.opts.exts&ExplicitStructNames != 0 {
 		switch h.kind {
 		case hUnit:
@@ -766,7 +954,7 @@ func (s *streamer) storeStruct(h *header, rv reflect.Value, pl *typePlan, start 
 			single = n == 1
 		}
 		if !single {
-			return s.store(h, fieldValue(rv, &si.Fields[0]), sp.fieldPlan(0), start, nv)
+			return s.store(h, fieldValue(rv, &si.Fields[0]), sp.fieldPlan(0))
 		}
 	}
 
