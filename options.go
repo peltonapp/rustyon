@@ -63,10 +63,14 @@ type EncodeOptions struct {
 	UnwrapNewtypes bool
 	// Registry is the enum registry, or nil for [DefaultRegistry].
 	Registry *Registry
+	// Pretty selects pretty printed output with the given layout. Nil gives
+	// compact output.
+	Pretty *PrettyConfig
 }
 
 func (o EncodeOptions) internal() *encodeOptions {
 	return &encodeOptions{
+		pretty:         o.Pretty,
 		structNames:    o.StructNames,
 		implicitSome:   o.ImplicitSome,
 		unwrapNewtypes: o.UnwrapNewtypes,

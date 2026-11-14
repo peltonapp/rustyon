@@ -288,6 +288,41 @@ func TestCompatCorpus(t *testing.T) {
 	t.Logf("%d documents compared", len(cases))
 }
 
+// TestCompatPretty checks that ron-rs reads pretty printed output in every
+// layout as the value rustyon printed.
+func TestCompatPretty(t *testing.T) {
+	o := getOracle(t)
+	cases := loadCorpus(t)
+	for _, c := range fuzzSeeds {
+		cases = append(cases, []byte(c))
+	}
+	n := 0
+	for _, doc := range cases {
+		v, err := Parse(doc)
+		if err != nil {
+			continue
+		}
+		for b := range uint16(1024) {
+			if b%11 != 0 && b > 63 {
+				continue
+			}
+			out, err := MarshalWithConfig(v, prettyConfigFromBits(b, uint8(b)))
+			if err != nil {
+				continue
+			}
+			n++
+			msg, err := compareDoc(o, out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if msg != "" {
+				t.Fatalf("config bits %d, document %q printed as %q: %s", b, doc, out, msg)
+			}
+		}
+	}
+	t.Logf("%d printed documents compared", n)
+}
+
 func FuzzCompat(f *testing.F) {
 	path := os.Getenv("RONRS_ORACLE")
 	for _, s := range fuzzSeeds {

@@ -248,6 +248,36 @@ func ExampleEncoder() {
 	// Output: #![enable(implicit_some)]Window(title:"main",width:640)
 }
 
+func ExampleMarshalWithConfig() {
+	type Level struct {
+		Name   string
+		Tiles  []int
+		Spawn  [2]int
+		Memo   string
+		Nested struct{ Deep []int }
+	}
+	l := Level{Name: "café", Tiles: []int{1, 2, 3}, Spawn: [2]int{4, 5}, Memo: "x"}
+	l.Nested.Deep = []int{9}
+	out, err := rustyon.MarshalWithConfig(l, rustyon.PrettyConfig{
+		CompactArrays:  true,
+		EscapeNonASCII: true,
+		DepthLimit:     1,
+		Indent:         "  ",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(out))
+	// Output:
+	// (
+	//   name: "caf\u{e9}",
+	//   tiles: [1, 2, 3],
+	//   spawn: [4, 5],
+	//   memo: "x",
+	//   nested: (deep: [9]),
+	// )
+}
+
 func ExampleNamingStrategy() {
 	type Window struct {
 		WindowTitle string

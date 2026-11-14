@@ -38,6 +38,7 @@ type encodeOptions struct {
 	unwrapNewtypes bool
 	naming         fields.Naming
 	registry       *Registry
+	pretty         *PrettyConfig // takes precedence over prefix and indent
 }
 
 func (o *encodeOptions) extensions() Extensions {
@@ -90,6 +91,11 @@ func MarshalIndent(v any, prefix, indent string) ([]byte, error) {
 }
 
 func marshal(v any, opts *encodeOptions) ([]byte, error) {
+	if opts.pretty != nil {
+		if err := opts.pretty.validate(); err != nil {
+			return nil, err
+		}
+	}
 	val, err := toValue(v, opts)
 	if err != nil {
 		return nil, err
@@ -99,6 +105,9 @@ func marshal(v any, opts *encodeOptions) ([]byte, error) {
 
 func printDocument(val Value, opts *encodeOptions) ([]byte, error) {
 	p := &printer{prefix: opts.prefix, indent: opts.indent}
+	if opts.pretty != nil {
+		p.configure(opts.pretty)
+	}
 	p.writeHeader(opts.extensions())
 	p.value(val)
 	if p.err != nil {
@@ -138,6 +147,7 @@ func NewEncoder(w io.Writer) *Encoder {
 func (enc *Encoder) SetIndent(prefix, indent string) {
 	enc.opts.prefix = prefix
 	enc.opts.indent = indent
+	enc.opts.pretty = nil
 }
 
 // SetStructNames makes the encoder write struct names, for example

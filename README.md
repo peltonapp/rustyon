@@ -83,6 +83,14 @@ type Window struct {
 }
 ```
 
+### Pretty printing options
+
+`MarshalIndent` covers the common case. `MarshalWithConfig` (or `Encoder.SetPrettyConfig`) mirrors ron-rs's `PrettyConfig`: compact arrays, structs and maps, separate tuple members, a depth limit, `\u{..}` escapes for non-ASCII text, custom line break, indent, prefix and separator after the colon, and `// [0]` index comments for lists. The output always parses back to the same value.
+
+```go
+out, err := rustyon.MarshalWithConfig(v, rustyon.PrettyConfig{CompactArrays: true, DepthLimit: 2})
+```
+
 ### Enums
 
 Go has no sum types, so a Rust enum becomes an interface and each variant a type that implements it:
